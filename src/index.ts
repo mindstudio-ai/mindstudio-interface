@@ -1,13 +1,13 @@
 /**
  * @mindstudio-ai/interface — Frontend SDK for MindStudio v2 app interfaces.
  *
- * Provides typed RPC to backend routes, platform actions (file picker,
+ * Provides typed RPC to backend methods, platform actions (file picker,
  * uploads), and current user context. Runs inside web interfaces
  * (iframes on *.static.mscdn.ai) with credentials injected by the platform.
  *
  * ## Three exports
  *
- * - `createClient()` — typed route RPC client
+ * - `createClient()` — typed method RPC client
  * - `platform` — file picker and upload actions
  * - `auth` — current user identity (display only)
  *
@@ -17,7 +17,7 @@
  *
  * const api = createClient();
  *
- * // Call backend routes
+ * // Call backend methods
  * const dashboard = await api.getDashboard();
  *
  * // Open the file picker

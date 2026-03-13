@@ -7,7 +7,7 @@
  *
  * This is for **display only**. Role checking, permission enforcement,
  * and user lookups for other users are backend concerns — the frontend
- * calls backend routes that handle those via `@mindstudio-ai/agent`'s
+ * calls backend methods that handle those via `@mindstudio-ai/agent`'s
  * `auth` namespace.
  *
  * @example

@@ -38,7 +38,7 @@ export interface BootstrapConfig {
   user: BootstrapUser;
 
   /**
-   * Route registry mapping export names to route IDs.
+   * Method registry mapping export names to method IDs.
    * Embedded at injection time from the release manifest.
    *
    * @example
@@ -46,7 +46,7 @@ export interface BootstrapConfig {
    * { "submitVendorRequest": "submit-vendor-request", "getDashboard": "get-dashboard" }
    * ```
    */
-  routes: Record<string, string>;
+  methods: Record<string, string>;
 }
 
 /**

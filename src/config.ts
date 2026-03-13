@@ -41,8 +41,8 @@ export function getConfig(): BootstrapConfig {
   }
 
   // Validate required fields
-  if (!raw.token || !raw.appId || !raw.releaseId || !raw.apiBaseUrl || !raw.user || !raw.routes) {
-    const missing = ['token', 'appId', 'releaseId', 'apiBaseUrl', 'user', 'routes']
+  if (!raw.token || !raw.appId || !raw.releaseId || !raw.apiBaseUrl || !raw.user || !raw.methods) {
+    const missing = ['token', 'appId', 'releaseId', 'apiBaseUrl', 'user', 'methods']
       .filter((k) => !raw[k as keyof BootstrapConfig])
       .join(', ');
 
