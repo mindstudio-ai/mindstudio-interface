@@ -140,10 +140,7 @@ export interface InvokeOptions {
  */
 type DefaultMethodClient = Record<
   string,
-  (
-    input?: Record<string, unknown>,
-    options?: InvokeOptions,
-  ) => Promise<unknown>
+  (input?: Record<string, unknown>, options?: InvokeOptions) => Promise<unknown>
 >;
 
 /**
@@ -210,8 +207,12 @@ export function createClient<T = DefaultMethodClient>(): T {
               error?: string;
               code?: string;
             };
-            if (body.error) errorMessage = body.error;
-            if (body.code) errorCode = body.code;
+            if (body.error) {
+              errorMessage = body.error;
+            }
+            if (body.code) {
+              errorCode = body.code;
+            }
           } catch {
             // Response wasn't JSON — use the default message
           }
@@ -236,14 +237,18 @@ export function createClient<T = DefaultMethodClient>(): T {
 
         while (true) {
           const { done, value } = await reader.read();
-          if (done) break;
+          if (done) {
+            break;
+          }
 
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split('\n');
           buffer = lines.pop() ?? '';
 
           for (const line of lines) {
-            if (!line.startsWith('data: ')) continue;
+            if (!line.startsWith('data: ')) {
+              continue;
+            }
             const json = line.slice(6);
             try {
               const event = JSON.parse(json) as {
@@ -253,11 +258,7 @@ export function createClient<T = DefaultMethodClient>(): T {
                 output?: unknown;
               };
 
-              if (
-                event.type === 'token' &&
-                options?.onToken &&
-                event.text
-              ) {
+              if (event.type === 'token' && options?.onToken && event.text) {
                 options.onToken(event.text);
               } else if (event.type === 'error' && event.error) {
                 if (options?.onStreamError) {

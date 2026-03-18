@@ -26,7 +26,9 @@ let _config: BootstrapConfig | undefined;
  * @throws {MindStudioInterfaceError} if `window.__MINDSTUDIO__` is missing or invalid
  */
 export function getConfig(): BootstrapConfig {
-  if (_config) return _config;
+  if (_config) {
+    return _config;
+  }
 
   const raw = (globalThis as Record<string, unknown>).__MINDSTUDIO__ as
     | Partial<BootstrapConfig>
@@ -41,8 +43,22 @@ export function getConfig(): BootstrapConfig {
   }
 
   // Validate required fields
-  if (!raw.token || !raw.appId || !raw.releaseId || !raw.apiBaseUrl || !raw.user || !raw.methods) {
-    const missing = ['token', 'appId', 'releaseId', 'apiBaseUrl', 'user', 'methods']
+  if (
+    !raw.token ||
+    !raw.appId ||
+    !raw.releaseId ||
+    !raw.apiBaseUrl ||
+    !raw.user ||
+    !raw.methods
+  ) {
+    const missing = [
+      'token',
+      'appId',
+      'releaseId',
+      'apiBaseUrl',
+      'user',
+      'methods',
+    ]
       .filter((k) => !raw[k as keyof BootstrapConfig])
       .join(', ');
 

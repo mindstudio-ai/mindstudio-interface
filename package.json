@@ -19,8 +19,9 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
-    "prepare": "tsup",
-    "prepublishOnly": "tsup"
+    "prepare": "husky",
+    "prepublishOnly": "tsup",
+    "lint:fix": "prettier --write ./src"
   },
   "publishConfig": {
     "access": "public"
@@ -43,7 +44,14 @@
   "license": "MIT",
   "sideEffects": false,
   "devDependencies": {
+    "husky": "^9.1.7",
+    "lint-staged": "^16.3.2",
+    "prettier": "^3.8.1",
+    "prettier-plugin-curly": "^0.4.1",
     "tsup": "^8",
     "typescript": "^5.5"
+  },
+  "lint-staged": {
+    "**/*": "prettier --write --ignore-unknown"
   }
 }
