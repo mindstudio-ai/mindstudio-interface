@@ -29,7 +29,7 @@
  */
 
 export { createClient, type InvokeOptions } from './client.js';
-export { platform } from './platform.js';
+export { platform, type UploadFileOptions } from './platform.js';
 export { auth, type AuthContext } from './auth.js';
 export { MindStudioInterfaceError } from './errors.js';
 export type { BootstrapConfig, BootstrapUser } from './types.js';

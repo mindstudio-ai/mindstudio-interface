@@ -11,11 +11,29 @@
  *
  * const file = document.querySelector('input[type=file]').files[0];
  * const url = await platform.uploadFile(file);
+ *
+ * // With progress and abort
+ * const controller = new AbortController();
+ * const url = await platform.uploadFile(file, {
+ *   onProgress: (fraction) => console.log(`${Math.round(fraction * 100)}%`),
+ *   signal: controller.signal,
+ * });
  * ```
  */
 
 import { getConfig } from './config.js';
 import { MindStudioInterfaceError } from './errors.js';
+
+/**
+ * Options for `platform.uploadFile()`.
+ */
+export interface UploadFileOptions {
+  /** Called with upload progress as a fraction from 0 to 1. */
+  onProgress?: (fraction: number) => void;
+
+  /** AbortSignal to cancel the upload. */
+  signal?: AbortSignal;
+}
 
 /**
  * The platform namespace — file upload actions.
@@ -28,16 +46,32 @@ export const platform = {
    * the file directly to S3. Returns the public CDN URL.
    *
    * @param file - The File to upload
+   * @param options - Optional progress callback and abort signal
    * @returns CDN URL of the uploaded file
    *
    * @example
    * ```ts
-   * const file = inputElement.files[0];
    * const url = await platform.uploadFile(file);
+   *
+   * // With progress
+   * const url = await platform.uploadFile(file, {
+   *   onProgress: (f) => setProgress(f),
+   * });
+   *
+   * // With abort
+   * const controller = new AbortController();
+   * const url = await platform.uploadFile(file, {
+   *   signal: controller.signal,
+   * });
+   * // controller.abort() to cancel
    * ```
    */
-  async uploadFile(file: File): Promise<string> {
+  async uploadFile(file: File, options?: UploadFileOptions): Promise<string> {
     const config = getConfig();
+    const { onProgress, signal } = options ?? {};
+
+    // Check if already aborted
+    signal?.throwIfAborted();
 
     // Step 1: Get presigned upload URL
     const presignUrl = `${config.apiBaseUrl}/_internal/v2/apps/${config.appId}/generate-upload-request`;
@@ -51,6 +85,7 @@ export const platform = {
         filename: file.name,
         contentType: file.type || 'application/octet-stream',
       }),
+      signal,
     });
 
     if (!presignRes.ok) {
@@ -75,9 +110,16 @@ export const platform = {
     }
     formData.append('file', file); // must be last
 
+    // Use XHR for upload progress (fetch doesn't support it)
+    if (onProgress) {
+      await xhrUpload(uploadUrl, formData, onProgress, signal);
+      return publicUrl;
+    }
+
     const uploadRes = await fetch(uploadUrl, {
       method: 'POST',
       body: formData,
+      signal,
     });
 
     if (!uploadRes.ok) {
@@ -91,3 +133,64 @@ export const platform = {
     return publicUrl;
   },
 };
+
+/**
+ * Upload via XMLHttpRequest to get progress events.
+ * Falls back from fetch because fetch upload streams don't support progress.
+ */
+function xhrUpload(
+  url: string,
+  formData: FormData,
+  onProgress: (fraction: number) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+
+    xhr.upload.addEventListener('progress', (e) => {
+      if (e.lengthComputable) {
+        onProgress(e.loaded / e.total);
+      }
+    });
+
+    xhr.addEventListener('load', () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        onProgress(1);
+        resolve();
+      } else {
+        reject(
+          new MindStudioInterfaceError(
+            `File upload failed: ${xhr.status} ${xhr.statusText}`,
+            'upload_error',
+            xhr.status,
+          ),
+        );
+      }
+    });
+
+    xhr.addEventListener('error', () => {
+      reject(
+        new MindStudioInterfaceError(
+          'File upload failed: network error',
+          'upload_error',
+        ),
+      );
+    });
+
+    xhr.addEventListener('abort', () => {
+      reject(new DOMException('Upload aborted', 'AbortError'));
+    });
+
+    // Wire up abort signal
+    if (signal) {
+      if (signal.aborted) {
+        reject(new DOMException('Upload aborted', 'AbortError'));
+        return;
+      }
+      signal.addEventListener('abort', () => xhr.abort(), { once: true });
+    }
+
+    xhr.open('POST', url);
+    xhr.send(formData);
+  });
+}
