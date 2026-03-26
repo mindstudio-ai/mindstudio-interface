@@ -66,15 +66,3 @@ export interface BootstrapUser {
   /** Profile picture URL, if set. */
   profilePictureUrl?: string;
 }
-
-// ---------------------------------------------------------------------------
-// Platform action options
-// ---------------------------------------------------------------------------
-
-/**
- * Options for `platform.requestFile()`.
- */
-export interface RequestFileOptions {
-  /** Filter the file picker by type. */
-  type?: 'image' | 'video' | 'audio' | 'document';
-}

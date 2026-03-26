@@ -2,7 +2,7 @@
 
 Frontend SDK for [MindStudio](https://mindstudio.ai) v2 app web interfaces.
 
-Typed RPC to backend routes, file picker, uploads, and user context — all from the browser. Zero dependencies, <3KB minified.
+Typed RPC to backend methods, file uploads, and user context — all from the browser. Zero dependencies, <3KB minified.
 
 ## Install
 
@@ -24,8 +24,8 @@ function App() {
     api.getDashboard().then(setDashboard);
   }, []);
 
-  const handleUpload = async () => {
-    const url = await platform.requestFile({ type: 'image' });
+  const handleUpload = async (file: File) => {
+    const url = await platform.uploadFile(file);
     // use the CDN url...
   };
 
@@ -33,7 +33,7 @@ function App() {
     <div>
       <p>Welcome, {auth.name}</p>
       <img src={auth.profilePictureUrl} />
-      <button onClick={handleUpload}>Upload</button>
+      <input type="file" onChange={(e) => handleUpload(e.target.files[0])} />
     </div>
   );
 }
@@ -65,20 +65,9 @@ interface AppRoutes {
 const api = createClient<AppRoutes>();
 ```
 
-### `platform.requestFile(options?)`
-
-Opens the MindStudio asset library / file picker. Returns a CDN URL.
-
-```ts
-const url = await platform.requestFile();
-const imageUrl = await platform.requestFile({ type: 'image' });
-```
-
-Options: `{ type?: 'image' | 'video' | 'audio' | 'document' }`
-
 ### `platform.uploadFile(file)`
 
-Upload a file directly to the CDN without opening a picker.
+Upload a file to the MindStudio CDN. Returns a public CDN URL.
 
 ```ts
 const url = await platform.uploadFile(file);
@@ -115,9 +104,9 @@ try {
 
 ## How it works
 
-The MindStudio platform injects `window.__MINDSTUDIO__` into the iframe before your code runs. This contains the session token, app/release IDs, user info, and route registry. The SDK reads this automatically — no configuration needed.
+The MindStudio platform injects `window.__MINDSTUDIO__` into the page before your code runs. This contains the session token, app/release IDs, user info, and method registry. The SDK reads this automatically — no configuration needed.
 
-Route calls go directly to the API via `fetch`. Platform actions (file picker) use `postMessage` to communicate with the host window.
+Method calls and file uploads go directly to the API via `fetch`.
 
 ## License
 

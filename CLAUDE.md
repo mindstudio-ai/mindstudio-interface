@@ -1,20 +1,20 @@
 # @mindstudio-ai/interface
 
-Frontend SDK for MindStudio v2 app web interfaces. Runs inside iframes on `*.static.mscdn.ai`, provides typed RPC to backend routes and platform actions (file picker, uploads).
+Frontend SDK for MindStudio v2 app web interfaces. Provides typed RPC to backend methods, file uploads, and user context. Uses short-lived session tokens injected via `window.__MINDSTUDIO__`.
 
-Completely separate from `@mindstudio-ai/agent` (which is privileged, backend-only, uses service-level tokens). This package uses short-lived session tokens and can only call the app's own routes.
+Completely separate from `@mindstudio-ai/agent` (which is privileged, backend-only, uses service-level tokens). This package uses short-lived session tokens and can only call the app's own methods.
 
 ## Project structure
 
 ```
 src/
   index.ts          — exports: createClient, platform, auth, MindStudioInterfaceError
-  client.ts         — createClient() → Proxy-based route RPC client
-  platform.ts       — requestFile() via postMessage + uploadFile() via fetch
+  client.ts         — createClient() → Proxy-based method RPC client
+  platform.ts       — uploadFile() via presigned S3 POST
   auth.ts           — user context from bootstrap globals (sync, read-only)
   config.ts         — reads window.__MINDSTUDIO__, validates, caches
   errors.ts         — MindStudioInterfaceError class
-  types.ts          — BootstrapConfig, BootstrapUser, RequestFileOptions
+  types.ts          — BootstrapConfig, BootstrapUser
 ```
 
 ## Key commands
@@ -27,7 +27,7 @@ src/
 
 ### Bootstrap
 
-The MindStudio platform injects `window.__MINDSTUDIO__` into the iframe's `index.html` before the app's JS runs:
+The MindStudio platform injects `window.__MINDSTUDIO__` into the page before the app's JS runs:
 
 ```js
 window.__MINDSTUDIO__ = {
@@ -36,7 +36,7 @@ window.__MINDSTUDIO__ = {
   releaseId: "uuid",
   apiBaseUrl: "https://api.mindstudio.ai",
   user: { id, name, email, profilePictureUrl },
-  routes: {                    // export name → route ID
+  methods: {                   // export name → method ID
     "submitVendorRequest": "submit-vendor-request",
     "getDashboard": "get-dashboard",
   }
@@ -45,7 +45,7 @@ window.__MINDSTUDIO__ = {
 
 The SDK reads this on first use (lazy — doesn't throw during import).
 
-### Route RPC (`createClient`)
+### Method RPC (`createClient`)
 
 ```ts
 import { createClient } from '@mindstudio-ai/interface';
@@ -56,40 +56,32 @@ const dashboard = await api.getDashboard();
 ```
 
 Each method call:
-1. Looks up route ID from `config.routes[methodName]`
-2. POSTs to `{apiBaseUrl}/_internal/v2/apps/{appId}/routes/{routeId}/invoke`
+1. Looks up method ID from `config.methods[methodName]`
+2. POSTs to `{apiBaseUrl}/_internal/v2/apps/{appId}/methods/{methodId}/invoke`
 3. Body: `{ input: { ...args } }`, Header: `Authorization: Bearer {token}`
 4. Returns `response.output` or throws `MindStudioInterfaceError`
 
 Type safety via generic parameter:
 ```ts
-interface AppRoutes {
+interface AppMethods {
   submitVendorRequest(input: SubmitVendorInput): Promise<SubmitVendorOutput>;
   getDashboard(): Promise<GetDashboardOutput>;
 }
-const api = createClient<AppRoutes>();
+const api = createClient<AppMethods>();
 ```
 
-### Platform actions (`platform`)
+### File uploads (`platform`)
 
 ```ts
 import { platform } from '@mindstudio-ai/interface';
 
-// Open the asset library / file picker (postMessage to host)
-const url = await platform.requestFile({ type: 'image' });
-
-// Direct upload without picker (HTTP POST)
-const uploaded = await platform.uploadFile(file);
+const url = await platform.uploadFile(file);
 ```
 
-`requestFile` uses the postMessage callback token pattern:
-1. Generate `callbackToken = crypto.randomUUID()`
-2. Send to parent: `{ action: 'requestFile', type?, callbackToken }`
-3. Parent opens modal, user picks file
-4. Parent sends back: `{ action: 'callback', callbackToken, result: { url } }`
-5. Promise resolves with URL
-
-`uploadFile` is direct HTTP to `/_internal/v2/apps/{appId}/upload`.
+`uploadFile` uses a two-step presigned POST flow:
+1. Requests a presigned upload URL from `/_internal/v2/apps/{appId}/generate-upload-request`
+2. Uploads the file directly to S3 via the presigned URL
+3. Returns the public CDN URL
 
 ### User context (`auth`)
 
@@ -106,23 +98,23 @@ Display purposes only — role checking is a backend concern.
 
 ## Architecture notes
 
-- **Zero runtime dependencies.** Uses built-in `fetch` and `postMessage`.
+- **Zero runtime dependencies.** Uses built-in `fetch` only.
 - **ESM only.** `"type": "module"` in package.json.
 - **Browser-only.** No Node.js APIs.
 - **Lazy initialization.** `getConfig()` reads `window.__MINDSTUDIO__` on first property access, not on import. Safe for SSR/test environments as long as you don't call methods.
 - **Proxy-based client.** `createClient()` returns a Proxy — any property access creates an async invoker function. No code generation needed.
-- **Session tokens.** Short-lived (`ms_iface_...`), scoped to app + user. Can only invoke that app's routes. Cannot access db/auth directly — those are backend concerns.
+- **Session tokens.** Short-lived (`ms_iface_...`), scoped to app + user. Can only invoke that app's methods. Cannot access db/auth directly — those are backend concerns.
 
 ## Comparison with @mindstudio-ai/agent
 
 | Aspect | `@mindstudio-ai/agent` | `@mindstudio-ai/interface` |
 |--------|----------------------|--------------------------|
-| Runs in | Backend (sandbox, CLI, CI) | Frontend (browser, iframe) |
+| Runs in | Backend (sandbox, CLI, CI) | Frontend (browser) |
 | Token type | API key / hook token (privileged) | Short-lived session token |
-| Can access | All steps, db, auth roles, AI models | Only app's own routes |
-| Data operations | `db.defineTable()`, SQL via SDK | Calls backend routes that use db |
+| Can access | All steps, db, auth roles, AI models | Only app's own methods |
+| Data operations | `db.defineTable()`, SQL via SDK | Calls backend methods that use db |
 | Auth | Full role map, `requireRole()` | User fragment for display only |
-| File operations | `mindstudio.uploadFile()` server-side | `platform.requestFile()` via picker |
+| File operations | `mindstudio.uploadFile()` server-side | `platform.uploadFile()` via presigned S3 POST |
 
 ## Code style
 
