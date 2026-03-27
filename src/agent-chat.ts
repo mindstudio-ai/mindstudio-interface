@@ -9,7 +9,7 @@
  *
  * ```
  * chat.sendMessage(threadId, 'Help me prep for my review', {
- *   onText: (text) => setAssistantMessage(text),
+ *   onText: (delta) => setAssistantMessage((prev) => prev + delta),
  * })
  *   │
  *   ├─ POST {apiBaseUrl}/_internal/v2/apps/{appId}/agent/threads/{threadId}/messages
@@ -54,7 +54,7 @@
  *
  * // Send a message with streaming
  * const response = chat.sendMessage(thread.id, 'Hello!', {
- *   onText: (text) => setMessage(text),
+ *   onText: (delta) => setMessage((prev) => prev + delta),
  *   onToolCallStart: (id, name) => showToolSpinner(name),
  *   onToolCallResult: (id, output) => showToolResult(output),
  * });
@@ -135,7 +135,7 @@ export interface ThreadListPage {
 // SSE event types
 // ---------------------------------------------------------------------------
 
-/** Accumulated assistant text delta. */
+/** Assistant text delta — append to your display string, do not replace. */
 export interface AgentTextEvent {
   type: 'text';
   text: string;
@@ -231,7 +231,17 @@ export type AgentChatEvent =
  * `tool_input_delta`.
  */
 export interface SendMessageCallbacks {
-  /** Called with accumulated assistant text on each text delta. */
+  /**
+   * Called with each text delta as the assistant responds.
+   *
+   * **Important:** `text` is a delta (new chunk), not the accumulated
+   * response. Append it to your display string — do not replace.
+   *
+   * @example
+   * ```ts
+   * onText: (delta) => setMessage((prev) => prev + delta)
+   * ```
+   */
   onText?: (text: string) => void;
 
   /** Called with model thinking text (extended thinking). */
@@ -406,7 +416,7 @@ function dispatchEvent(
  * const thread = await chat.createThread();
  *
  * const response = chat.sendMessage(thread.id, 'Hello!', {
- *   onText: (text) => setAssistantMessage(text),
+ *   onText: (delta) => setAssistantMessage((prev) => prev + delta),
  *   onToolCallStart: (id, name) => showToolSpinner(name),
  *   onToolCallResult: (id, output) => showToolResult(output),
  * });

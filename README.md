@@ -119,11 +119,11 @@ function ChatInput({ threadId }: { threadId: string }) {
 
   const send = (content: string) => {
     const response = chat.sendMessage(threadId, content, {
-      // Accumulated assistant text (replace, don't append)
-      onText: (t) => setText(t),
+      // Text deltas — append, don't replace
+      onText: (delta) => setText((prev) => prev + delta),
 
-      // Extended thinking
-      onThinking: (t) => setThinking(t),
+      // Extended thinking (also deltas)
+      onThinking: (delta) => setThinking((prev) => prev + delta),
       onThinkingComplete: (thinking, signature) => setThinking(''),
 
       // Tool execution
@@ -158,7 +158,7 @@ function ChatInput({ threadId }: { threadId: string }) {
 const controller = new AbortController();
 
 const response = chat.sendMessage(threadId, content, {
-  onText: (t) => setText(t),
+  onText: (delta) => setText((prev) => prev + delta),
   signal: controller.signal,
 });
 
@@ -173,8 +173,8 @@ All events are available via the `onEvent` catch-all as the `AgentChatEvent` dis
 
 | Event | Fields | Named callback |
 |-------|--------|----------------|
-| `text` | `text` | `onText` |
-| `thinking` | `text` | `onThinking` |
+| `text` | `text` (delta) | `onText` |
+| `thinking` | `text` (delta) | `onThinking` |
 | `thinking_complete` | `thinking`, `signature` | `onThinkingComplete` |
 | `tool_call_start` | `id`, `name` | `onToolCallStart` |
 | `tool_call_result` | `id`, `output` | `onToolCallResult` |

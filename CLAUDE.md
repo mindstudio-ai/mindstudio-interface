@@ -113,7 +113,7 @@ await chat.deleteThread(thread.id);
 
 // Send message with streaming
 const response = chat.sendMessage(thread.id, 'Hello!', {
-  onText: (text) => setMessage(text),
+  onText: (delta) => setMessage((prev) => prev + delta),
   onToolCallStart: (id, name) => showSpinner(name),
   onToolCallResult: (id, output) => showResult(output),
 });

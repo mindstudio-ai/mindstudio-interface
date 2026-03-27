@@ -30,7 +30,7 @@
  * // Agent chat with streaming
  * const thread = await chat.createThread();
  * await chat.sendMessage(thread.id, 'Hello!', {
- *   onText: (text) => console.log(text),
+ *   onText: (delta) => process.stdout.write(delta),
  * });
  *
  * // Upload a file
