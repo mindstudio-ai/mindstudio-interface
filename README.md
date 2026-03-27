@@ -167,6 +167,25 @@ response.abort();
 controller.abort();
 ```
 
+#### Attachments
+
+Send images or documents alongside a message. Upload files first via `platform.uploadFile()`, then pass the CDN URLs:
+
+```ts
+const url = await platform.uploadFile(file);
+
+chat.sendMessage(threadId, "What's in this document?", {
+  onText: (delta) => setText((prev) => prev + delta),
+}, {
+  attachments: [url],
+});
+```
+
+- **Images** (`i.mscdn.ai`): Sent to the model as vision input (one image per message)
+- **Documents** (`f.mscdn.ai`): Text extracted server-side and included in context
+
+Attachments are preserved in thread history — when you load a thread via `getThread()`, user messages include their original `attachments` array.
+
 #### SSE event types
 
 All events are available via the `onEvent` catch-all as the `AgentChatEvent` discriminated union:

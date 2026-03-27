@@ -119,6 +119,11 @@ const response = chat.sendMessage(thread.id, 'Hello!', {
 });
 const { stopReason, usage } = await response;
 response.abort(); // cancel mid-stream
+
+// Send with attachments (upload first via platform.uploadFile())
+chat.sendMessage(thread.id, 'What is this?', callbacks, {
+  attachments: ['https://i.mscdn.ai/.../photo.png'],
+});
 ```
 
 Stateless client — thread CRUD and message streaming over SSE. The app manages its own state.

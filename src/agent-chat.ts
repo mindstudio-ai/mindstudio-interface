@@ -115,6 +115,15 @@ export interface Message {
   role: 'user' | 'assistant';
   /** Message text content. For tool results, this is JSON-stringified output. */
   content: string;
+  /**
+   * MindStudio CDN URLs attached to this message (user messages only).
+   *
+   * Images (`i.mscdn.ai`) are sent to the model as vision input.
+   * Documents (`f.mscdn.ai`, `files.mindstudio-cdn.com`) have their text
+   * extracted server-side and included in the model context. The original
+   * URLs are preserved in thread history for the frontend to render.
+   */
+  attachments?: string[];
   /** Tool calls the assistant requested (assistant messages only). */
   toolCalls?: ToolCall[];
   /** ID of the tool call this message is a result for (tool result messages only). */
@@ -266,6 +275,28 @@ export interface SendMessageCallbacks {
   signal?: AbortSignal;
 }
 
+/** Options for `sendMessage`. */
+export interface SendMessageOptions {
+  /**
+   * MindStudio CDN URLs to attach to the message.
+   *
+   * Images (`i.mscdn.ai`) are sent to the model as vision input (one per message).
+   * Documents (`f.mscdn.ai`, `files.mindstudio-cdn.com`) have their text
+   * extracted server-side and included in context.
+   *
+   * Upload files first via `platform.uploadFile()`.
+   *
+   * @example
+   * ```ts
+   * const url = await platform.uploadFile(file);
+   * chat.sendMessage(threadId, 'What is this?', callbacks, {
+   *   attachments: [url],
+   * });
+   * ```
+   */
+  attachments?: string[];
+}
+
 /** Resolved value of `sendMessage` — extracted from the `done` event. */
 export interface SendMessageResult {
   /** Why the agent stopped (`"end_turn"`, `"max_tokens"`, etc.). */
@@ -307,11 +338,17 @@ export interface AgentChatClient {
    * Returns an {@link AbortablePromise} that resolves with
    * `{ stopReason, usage }` when the stream completes. Call `.abort()`
    * on the returned promise to cancel mid-stream.
+   *
+   * @param options.attachments - MindStudio CDN URLs to attach.
+   *   Images (`i.mscdn.ai`) are sent as vision input.
+   *   Documents (`f.mscdn.ai`) have text extracted into context.
+   *   Upload files first via `platform.uploadFile()`.
    */
   sendMessage(
     threadId: string,
     content: string,
     callbacks?: SendMessageCallbacks,
+    options?: SendMessageOptions,
   ): AbortablePromise<SendMessageResult>;
 }
 
@@ -451,6 +488,7 @@ export function createAgentChatClient(): AgentChatClient {
       threadId: string,
       content: string,
       callbacks?: SendMessageCallbacks,
+      options?: SendMessageOptions,
     ): AbortablePromise<SendMessageResult> {
       const controller = new AbortController();
       const cb = callbacks ?? {};
@@ -476,7 +514,12 @@ export function createAgentChatClient(): AgentChatClient {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${config.token}`,
           },
-          body: JSON.stringify({ content }),
+          body: JSON.stringify({
+            content,
+            ...(options?.attachments?.length && {
+              attachments: options.attachments,
+            }),
+          }),
           signal: controller.signal,
         });
 

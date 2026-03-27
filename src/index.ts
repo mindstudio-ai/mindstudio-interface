@@ -47,6 +47,7 @@ export {
   type AgentChatClient,
   type AgentChatEvent,
   type SendMessageCallbacks,
+  type SendMessageOptions,
   type SendMessageResult,
   type AbortablePromise,
   type Thread,
