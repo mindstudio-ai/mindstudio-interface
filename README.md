@@ -2,7 +2,7 @@
 
 Frontend SDK for [MindStudio](https://mindstudio.ai) v2 app web interfaces.
 
-Typed RPC to backend methods, file uploads, and user context — all from the browser. Zero dependencies, <3KB minified.
+Typed RPC to backend methods, file uploads, agent chat, and user context — all from the browser. Zero dependencies.
 
 ## Install
 
@@ -86,6 +86,103 @@ auth.profilePictureUrl  // "https://..." or null
 
 For display purposes only. Role checking and permissions are handled by backend routes using `@mindstudio-ai/agent`.
 
+### `createAgentChatClient()`
+
+Stateless client for thread-based conversations with AI agents. The agent runs server-side with access to your app's methods as tools.
+
+#### Thread management
+
+```ts
+import { createAgentChatClient } from '@mindstudio-ai/interface';
+
+const chat = createAgentChatClient();
+
+const thread = await chat.createThread();
+const { threads, nextCursor } = await chat.listThreads();
+const full = await chat.getThread(thread.id);
+await chat.updateThread(thread.id, 'New title');
+await chat.deleteThread(thread.id);
+
+// Paginate
+const page2 = await chat.listThreads(nextCursor);
+```
+
+#### Sending messages
+
+`sendMessage` streams the agent's response via SSE. Named callbacks handle common events; the catch-all `onEvent` receives everything as a discriminated union.
+
+```tsx
+function ChatInput({ threadId }: { threadId: string }) {
+  const [text, setText] = useState('');
+  const [thinking, setThinking] = useState('');
+  const [tools, setTools] = useState<Map<string, string>>(new Map());
+
+  const send = (content: string) => {
+    const response = chat.sendMessage(threadId, content, {
+      // Accumulated assistant text (replace, don't append)
+      onText: (t) => setText(t),
+
+      // Extended thinking
+      onThinking: (t) => setThinking(t),
+      onThinkingComplete: (thinking, signature) => setThinking(''),
+
+      // Tool execution
+      onToolCallStart: (id, name) =>
+        setTools((m) => new Map(m).set(id, `Running ${name}...`)),
+      onToolCallResult: (id, output) =>
+        setTools((m) => new Map(m).set(id, JSON.stringify(output))),
+
+      // Errors
+      onError: (error) => console.error('Stream error:', error),
+
+      // Catch-all for logging or low-level events (tool_use, tool_input_delta)
+      onEvent: (event) => console.log(event.type, event),
+    });
+
+    // Resolves when stream completes
+    response.then(({ stopReason, usage }) => {
+      console.log(`Done: ${stopReason}, tokens: ${usage.inputTokens}+${usage.outputTokens}`);
+    });
+
+    // Cancel mid-stream
+    // response.abort();
+  };
+}
+```
+
+#### Abort support
+
+`sendMessage` returns an `AbortablePromise` — a standard Promise with an `.abort()` method. You can also pass an `AbortSignal` via the callbacks:
+
+```ts
+const controller = new AbortController();
+
+const response = chat.sendMessage(threadId, content, {
+  onText: (t) => setText(t),
+  signal: controller.signal,
+});
+
+// Either works:
+response.abort();
+controller.abort();
+```
+
+#### SSE event types
+
+All events are available via the `onEvent` catch-all as the `AgentChatEvent` discriminated union:
+
+| Event | Fields | Named callback |
+|-------|--------|----------------|
+| `text` | `text` | `onText` |
+| `thinking` | `text` | `onThinking` |
+| `thinking_complete` | `thinking`, `signature` | `onThinkingComplete` |
+| `tool_call_start` | `id`, `name` | `onToolCallStart` |
+| `tool_call_result` | `id`, `output` | `onToolCallResult` |
+| `error` | `error` | `onError` |
+| `tool_use` | `id`, `name`, `input` | `onEvent` only |
+| `tool_input_delta` | `id`, `name`, `delta` | `onEvent` only |
+| `done` | `stopReason`, `usage` | resolves the Promise |
+
 ## Error handling
 
 ```ts
@@ -106,7 +203,7 @@ try {
 
 The MindStudio platform injects `window.__MINDSTUDIO__` into the page before your code runs. This contains the session token, app/release IDs, user info, and method registry. The SDK reads this automatically — no configuration needed.
 
-Method calls and file uploads go directly to the API via `fetch`.
+Method calls, file uploads, and agent chat go directly to the API via `fetch`. Agent chat streaming uses SSE (Server-Sent Events) parsed from the response body.
 
 ## License
 

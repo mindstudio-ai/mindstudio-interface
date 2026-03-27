@@ -8,8 +8,9 @@ Completely separate from `@mindstudio-ai/agent` (which is privileged, backend-on
 
 ```
 src/
-  index.ts          — exports: createClient, platform, auth, MindStudioInterfaceError
+  index.ts          — exports: createClient, createAgentChatClient, platform, auth, MindStudioInterfaceError
   client.ts         — createClient() → Proxy-based method RPC client
+  agent-chat.ts     — createAgentChatClient() → thread CRUD + SSE message streaming
   platform.ts       — uploadFile() via presigned S3 POST
   auth.ts           — user context from bootstrap globals (sync, read-only)
   config.ts         — reads window.__MINDSTUDIO__, validates, caches
@@ -95,6 +96,38 @@ auth.profilePictureUrl  // "https://..." or null
 ```
 
 Display purposes only — role checking is a backend concern.
+
+### Agent chat (`createAgentChatClient`)
+
+```ts
+import { createAgentChatClient } from '@mindstudio-ai/interface';
+
+const chat = createAgentChatClient();
+
+// Thread lifecycle
+const thread = await chat.createThread();
+const { threads } = await chat.listThreads();
+const full = await chat.getThread(thread.id);
+await chat.updateThread(thread.id, 'New title');
+await chat.deleteThread(thread.id);
+
+// Send message with streaming
+const response = chat.sendMessage(thread.id, 'Hello!', {
+  onText: (text) => setMessage(text),
+  onToolCallStart: (id, name) => showSpinner(name),
+  onToolCallResult: (id, output) => showResult(output),
+});
+const { stopReason, usage } = await response;
+response.abort(); // cancel mid-stream
+```
+
+Stateless client — thread CRUD and message streaming over SSE. The app manages its own state.
+
+**Thread endpoints:** `/_internal/v2/apps/{appId}/agent/threads/...`
+
+**SSE events:** `text`, `thinking`, `thinking_complete`, `tool_use`, `tool_input_delta`, `tool_call_start`, `tool_call_result`, `done`, `error`. Named callbacks for common events + `onEvent` catch-all for the full discriminated union.
+
+**Abort:** `sendMessage` returns an `AbortablePromise` — a Promise with `.abort()`. Also accepts `signal` in callbacks for `AbortController` integration.
 
 ## Architecture notes
 
