@@ -33,9 +33,7 @@ The MindStudio platform injects `window.__MINDSTUDIO__` into the page before the
 ```js
 window.__MINDSTUDIO__ = {
   token: "ms_iface_...",       // short-lived session token
-  appId: "uuid",
   releaseId: "uuid",
-  apiBaseUrl: "https://api.mindstudio.ai",
   user: { id, name, email, profilePictureUrl },
   methods: {                   // export name → method ID
     "submitVendorRequest": "submit-vendor-request",
@@ -58,7 +56,7 @@ const dashboard = await api.getDashboard();
 
 Each method call:
 1. Looks up method ID from `config.methods[methodName]`
-2. POSTs to `{apiBaseUrl}/_internal/v2/apps/{appId}/methods/{methodId}/invoke`
+2. POSTs to `/_/methods/{methodId}/invoke`
 3. Body: `{ input: { ...args } }`, Header: `Authorization: Bearer {token}`
 4. Returns `response.output` or throws `MindStudioInterfaceError`
 
@@ -80,7 +78,7 @@ const url = await platform.uploadFile(file);
 ```
 
 `uploadFile` uses a two-step presigned POST flow:
-1. Requests a presigned upload URL from `/_internal/v2/apps/{appId}/generate-upload-request`
+1. Requests a presigned upload URL from `/_/generate-upload-request`
 2. Uploads the file directly to S3 via the presigned URL
 3. Returns the public CDN URL
 
@@ -128,7 +126,7 @@ chat.sendMessage(thread.id, 'What is this?', callbacks, {
 
 Stateless client — thread CRUD and message streaming over SSE. The app manages its own state.
 
-**Thread endpoints:** `/_internal/v2/apps/{appId}/agent/threads/...`
+**Thread endpoints:** `/_/agent/threads/...`
 
 **SSE events:** `text`, `thinking`, `thinking_complete`, `tool_use`, `tool_input_delta`, `tool_call_start`, `tool_call_result`, `done`, `error`. Named callbacks for common events + `onEvent` catch-all for the full discriminated union.
 

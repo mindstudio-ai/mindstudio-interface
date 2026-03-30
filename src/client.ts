@@ -13,7 +13,7 @@
  *   ├─ Look up method ID: config.methods["submitVendorRequest"]
  *   │  → "submit-vendor-request"
  *   │
- *   ├─ POST {apiBaseUrl}/_internal/v2/apps/{appId}/methods/submit-vendor-request/invoke
+ *   ├─ POST /_/methods/submit-vendor-request/invoke
  *   │  Authorization: Bearer {session token}
  *   │  Body: { input: { name: "Acme" } }
  *   │
@@ -184,7 +184,7 @@ export function createClient<T = DefaultMethodClient>(): T {
           );
         }
 
-        const url = `${config.apiBaseUrl}/_internal/v2/apps/${config.appId}/methods/${methodId}/invoke`;
+        const url = `/_/methods/${methodId}/invoke`;
         const wantsStream = options?.stream === true;
 
         const res = await fetch(url, {

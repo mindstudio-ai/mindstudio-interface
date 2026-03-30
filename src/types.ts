@@ -25,14 +25,14 @@ export interface BootstrapConfig {
   /** Short-lived session token scoped to this app + user. */
   token: string;
 
-  /** App ID. */
-  appId: string;
+  /** App ID (optional — not needed for API calls, resolved from subdomain). */
+  appId?: string;
 
   /** Current release ID. */
   releaseId: string;
 
-  /** API base URL (e.g. "https://api.mindstudio.ai"). */
-  apiBaseUrl: string;
+  /** API base URL (optional — SDK uses same-origin `/_/` paths). */
+  apiBaseUrl?: string;
 
   /** Resolved user fragment — display info for the current user. */
   user: BootstrapUser;

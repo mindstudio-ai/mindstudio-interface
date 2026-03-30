@@ -12,7 +12,7 @@
  *   onText: (delta) => setAssistantMessage((prev) => prev + delta),
  * })
  *   │
- *   ├─ POST {apiBaseUrl}/_internal/v2/apps/{appId}/agent/threads/{threadId}/messages
+ *   ├─ POST /_/agent/threads/{threadId}/messages
  *   │  Authorization: Bearer {session token}
  *   │  Body: { content: "Help me prep for my review" }
  *   │
@@ -356,10 +356,7 @@ export interface AgentChatClient {
 // Private helpers
 // ---------------------------------------------------------------------------
 
-function agentBaseUrl(): string {
-  const config = getConfig();
-  return `${config.apiBaseUrl}/_internal/v2/apps/${config.appId}/agent`;
-}
+const AGENT_BASE = '/_/agent';
 
 async function request<T>(
   path: string,
@@ -375,7 +372,7 @@ async function request<T>(
     headers['Content-Type'] = 'application/json';
   }
 
-  const res = await fetch(`${agentBaseUrl()}${path}`, {
+  const res = await fetch(`${AGENT_BASE}${path}`, {
     method,
     headers,
     ...(body !== undefined && { body: JSON.stringify(body) }),
@@ -506,7 +503,7 @@ export function createAgentChatClient(): AgentChatClient {
 
       const promise = (async (): Promise<SendMessageResult> => {
         const config = getConfig();
-        const url = `${agentBaseUrl()}/threads/${threadId}/messages`;
+        const url = `${AGENT_BASE}/threads/${threadId}/messages`;
 
         const res = await fetch(url, {
           method: 'POST',

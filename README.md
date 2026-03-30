@@ -220,9 +220,9 @@ try {
 
 ## How it works
 
-The MindStudio platform injects `window.__MINDSTUDIO__` into the page before your code runs. This contains the session token, app/release IDs, user info, and method registry. The SDK reads this automatically — no configuration needed.
+The MindStudio platform injects `window.__MINDSTUDIO__` into the page before your code runs. This contains the session token, user info, and method registry. The SDK reads this automatically — no configuration needed.
 
-Method calls, file uploads, and agent chat go directly to the API via `fetch`. Agent chat streaming uses SSE (Server-Sent Events) parsed from the response body.
+All API calls use same-origin `/_/` paths (e.g. `/_/methods/{id}/invoke`, `/_/agent/threads`). The platform proxy resolves the app from the subdomain — no cross-origin requests or app IDs in URLs. This works identically in production and local dev.
 
 ## License
 

@@ -74,7 +74,7 @@ export const platform = {
     signal?.throwIfAborted();
 
     // Step 1: Get presigned upload URL
-    const presignUrl = `${config.apiBaseUrl}/_internal/v2/apps/${config.appId}/generate-upload-request`;
+    const presignUrl = '/_/generate-upload-request';
     const presignRes = await fetch(presignUrl, {
       method: 'POST',
       headers: {
