@@ -12,10 +12,12 @@ src/
   client.ts         — createClient() → Proxy-based method RPC client
   agent-chat.ts     — createAgentChatClient() → thread CRUD + SSE message streaming
   platform.ts       — uploadFile() via presigned S3 POST
-  auth.ts           — user context from bootstrap globals (sync, read-only)
-  config.ts         — reads window.__MINDSTUDIO__, validates, caches
+  auth.ts           — auth flows (email/SMS codes, session state, logout)
+  auth-phone.ts     — phone helpers (countries, formatting, E.164 conversion)
+  auth-email.ts     — email validation
+  config.ts         — reads window.__MINDSTUDIO__, validates, caches, updateConfig()
   errors.ts         — MindStudioInterfaceError class
-  types.ts          — BootstrapConfig, BootstrapUser
+  types.ts          — BootstrapConfig, AppUser, AuthSessionBundle
 ```
 
 ## Key commands
@@ -82,18 +84,46 @@ const url = await platform.uploadFile(file);
 2. Uploads the file directly to S3 via the presigned URL
 3. Returns the public CDN URL
 
-### User context (`auth`)
+### Authentication (`auth`)
 
 ```ts
 import { auth } from '@mindstudio-ai/interface';
 
-auth.userId             // "uuid"
-auth.name               // "Sean"
-auth.email              // "sean@example.com"
-auth.profilePictureUrl  // "https://..." or null
+// State (sync — reads from cached bootstrap config)
+auth.getCurrentUser()    // AppUser | null
+auth.isAuthenticated()   // boolean
+
+// Email code flow
+const { verificationId } = await auth.sendEmailCode('user@example.com');
+const user = await auth.verifyEmailCode(verificationId, '123456');
+
+// SMS code flow
+const { verificationId } = await auth.sendSmsCode('+15551234567');
+const user = await auth.verifySmsCode(verificationId, '123456');
+
+// Email/phone change (requires authentication)
+await auth.requestEmailChange('new@example.com');
+await auth.confirmEmailChange('new@example.com', '123456');
+
+// Logout
+await auth.logout();
+
+// Phone helpers
+auth.phone.countries          // [{ code: 'US', dialCode: '+1', name: 'United States', flag: '🇺🇸' }, ...]
+auth.phone.detectCountry()    // 'US' (from timezone)
+auth.phone.toE164('5551234567', 'US')  // '+15551234567'
+auth.phone.format('+15551234567')      // '+1 (555) 123-4567'
+auth.phone.isValid('+15551234567')     // true
+
+// Email helpers
+auth.email.isValid('user@example.com') // true
 ```
 
-Display purposes only — role checking is a backend concern.
+Verify/confirm/logout methods update `window.__MINDSTUDIO__` in-place with the returned `{ user, token, methods }` bundle. All downstream calls (method invocation, agent chat, uploads) immediately use the new session.
+
+**User shape (`AppUser`):** `{ id, email, phone, roles, createdAt }` — same everywhere (bootstrap, API responses, `getCurrentUser()`). `null` means unauthenticated.
+
+**Endpoints:** `/_/auth/email/send`, `/_/auth/email/verify`, `/_/auth/sms/send`, `/_/auth/sms/verify`, `/_/auth/email/change`, `/_/auth/email/change/confirm`, `/_/auth/phone/change`, `/_/auth/phone/change/confirm`, `/_/auth/logout`, `/_/auth/me`.
 
 ### Agent chat (`createAgentChatClient`)
 

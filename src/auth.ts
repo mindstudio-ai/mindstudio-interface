@@ -1,70 +1,301 @@
 /**
- * Auth context — current user's identity for display purposes.
+ * Auth — app-managed authentication for MindStudio v2 apps.
  *
- * Provides synchronous access to the current user's name, email, and
- * profile picture. Hydrated from the bootstrap globals injected by the
- * platform — no HTTP call needed.
+ * Provides verification code flows (email + SMS), session state
+ * management, and phone/email validation helpers. The platform
+ * handles code delivery, cookie management, and user storage —
+ * developers build their own login UI using these methods.
  *
- * This is for **display only**. Role checking, permission enforcement,
- * and user lookups for other users are backend concerns — the frontend
- * calls backend methods that handle those via `@mindstudio-ai/agent`'s
- * `auth` namespace.
+ * ## How it works
+ *
+ * ```
+ * // 1. Send a verification code
+ * const { verificationId } = await auth.sendEmailCode('user@example.com');
+ *
+ * // 2. User enters the code in your UI
+ * const user = await auth.verifyEmailCode(verificationId, '123456');
+ *
+ * // 3. Session is now active — all SDK calls use the authenticated token
+ * const result = await api.getDashboard(); // uses authenticated session
+ * auth.getCurrentUser(); // { id, email, phone, roles, createdAt }
+ * ```
+ *
+ * Verify, confirm, and logout methods update `window.__MINDSTUDIO__`
+ * in-place so all downstream calls (method invocation, agent chat,
+ * uploads) immediately use the new session. No page refresh needed.
  *
  * @example
- * ```ts
+ * ```tsx
  * import { auth } from '@mindstudio-ai/interface';
  *
- * return (
- *   <div>
- *     <p>Welcome, {auth.name}</p>
- *     <img src={auth.profilePictureUrl} />
- *   </div>
- * );
+ * function LoginPage() {
+ *   const [email, setEmail] = useState('');
+ *   const [verificationId, setVerificationId] = useState('');
+ *   const [code, setCode] = useState('');
+ *
+ *   const handleSend = async () => {
+ *     const { verificationId } = await auth.sendEmailCode(email);
+ *     setVerificationId(verificationId);
+ *   };
+ *
+ *   const handleVerify = async () => {
+ *     await auth.verifyEmailCode(verificationId, code);
+ *     // Session updated in-place — navigate to your app
+ *     window.location.href = '/dashboard';
+ *   };
+ * }
  * ```
  */
 
-import { getConfig } from './config.js';
+import { getConfig, updateConfig } from './config.js';
+import { MindStudioInterfaceError } from './errors.js';
+import type { AppUser, AuthSessionBundle } from './types.js';
+import * as phoneHelpers from './auth-phone.js';
+import * as emailHelpers from './auth-email.js';
 
-/**
- * User identity context. All properties are read-only and synchronous.
- */
-export interface AuthContext {
-  /** Current user's ID (UUID). */
-  readonly userId: string;
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
 
-  /** Current user's display name. */
-  readonly name: string;
+async function authFetch<T>(
+  path: string,
+  method: 'GET' | 'POST',
+  body?: Record<string, unknown>,
+): Promise<T> {
+  const config = getConfig();
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${config.token}`,
+  };
 
-  /** Current user's email address. */
-  readonly email: string;
+  if (body !== undefined) {
+    headers['Content-Type'] = 'application/json';
+  }
 
-  /** Current user's profile picture URL, or null if not set. */
-  readonly profilePictureUrl: string | null;
+  const res = await fetch(path, {
+    method,
+    headers,
+    ...(body !== undefined && { body: JSON.stringify(body) }),
+  });
+
+  if (!res.ok) {
+    let message = `Auth request failed: ${res.status} ${res.statusText}`;
+    let code = 'auth_error';
+    try {
+      const err = (await res.json()) as { error?: string; code?: string };
+      if (err.error) {
+        message = err.error;
+      }
+      if (err.code) {
+        code = err.code;
+      }
+    } catch {
+      // Response wasn't JSON
+    }
+    throw new MindStudioInterfaceError(message, code, res.status);
+  }
+
+  return (await res.json()) as T;
 }
 
-/**
- * Lazy auth proxy — reads from bootstrap globals on first property access.
- *
- * Using a Proxy lets us export `auth` as a module-level constant while
- * deferring the `getConfig()` call until the first property is accessed.
- * This avoids throwing during import if the page hasn't finished loading
- * the bootstrap script yet.
- */
-export const auth: AuthContext = new Proxy({} as AuthContext, {
-  get(_, prop: string) {
-    const { user } = getConfig();
+function applySession(bundle: AuthSessionBundle): void {
+  updateConfig({
+    token: bundle.token,
+    user: bundle.user,
+    methods: bundle.methods,
+  });
+}
 
-    switch (prop) {
-      case 'userId':
-        return user.id;
-      case 'name':
-        return user.name;
-      case 'email':
-        return user.email;
-      case 'profilePictureUrl':
-        return user.profilePictureUrl ?? null;
-      default:
-        return undefined;
-    }
+function requireUser(bundle: AuthSessionBundle): AppUser {
+  if (!bundle.user) {
+    throw new MindStudioInterfaceError(
+      'Verification succeeded but no user was returned',
+      'auth_error',
+    );
+  }
+  return bundle.user;
+}
+
+// ---------------------------------------------------------------------------
+// Auth interface
+// ---------------------------------------------------------------------------
+
+/** The auth namespace — authentication flows, state, and helpers. */
+export interface Auth {
+  // -- State --
+
+  /** Get the current authenticated user, or `null` if not authenticated. */
+  getCurrentUser(): AppUser | null;
+
+  /** Whether the current session is authenticated. */
+  isAuthenticated(): boolean;
+
+  // -- Email code flow --
+
+  /** Send a 6-digit verification code to an email address. */
+  sendEmailCode(email: string): Promise<{ verificationId: string }>;
+
+  /**
+   * Verify an email code. On success, updates the session in-place
+   * and returns the authenticated user.
+   */
+  verifyEmailCode(verificationId: string, code: string): Promise<AppUser>;
+
+  // -- SMS code flow --
+
+  /** Send a 6-digit verification code via SMS. Phone must be E.164. */
+  sendSmsCode(phone: string): Promise<{ verificationId: string }>;
+
+  /**
+   * Verify an SMS code. On success, updates the session in-place
+   * and returns the authenticated user.
+   */
+  verifySmsCode(verificationId: string, code: string): Promise<AppUser>;
+
+  // -- Email/phone change (requires authentication) --
+
+  /** Request an email change. Sends a code to the new email. */
+  requestEmailChange(newEmail: string): Promise<void>;
+
+  /** Confirm an email change with the verification code. */
+  confirmEmailChange(newEmail: string, code: string): Promise<AppUser>;
+
+  /** Request a phone change. Sends a code to the new phone (E.164). */
+  requestPhoneChange(newPhone: string): Promise<void>;
+
+  /** Confirm a phone change with the verification code. */
+  confirmPhoneChange(newPhone: string, code: string): Promise<AppUser>;
+
+  // -- Session --
+
+  /** Log out. Clears the cookie and updates the session to unauthenticated. */
+  logout(): Promise<void>;
+
+  // -- Helpers --
+
+  /** Phone number utilities — countries, formatting, validation. */
+  phone: {
+    /** All countries with dial codes, sorted alphabetically. */
+    countries: readonly phoneHelpers.Country[];
+    /** Detect the user's country from their timezone. Falls back to `'US'`. */
+    detectCountry(): string;
+    /** Format an E.164 number for display (e.g. `+1 (555) 123-4567`). */
+    format(e164: string): string;
+    /** Convert a national number to E.164 (e.g. `('5551234567', 'US') → '+15551234567'`). */
+    toE164(national: string, countryCode: string): string;
+    /** Check if a string is a valid E.164 phone number. */
+    isValid(phone: string): boolean;
+  };
+
+  /** Email validation. */
+  email: {
+    /** Basic email format check. */
+    isValid(email: string): boolean;
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Implementation
+// ---------------------------------------------------------------------------
+
+export const auth: Auth = {
+  // -- State --
+
+  getCurrentUser() {
+    return getConfig().user;
   },
-});
+
+  isAuthenticated() {
+    return getConfig().user !== null;
+  },
+
+  // -- Email code flow --
+
+  sendEmailCode(email: string) {
+    return authFetch<{ verificationId: string }>('/_/auth/email/send', 'POST', {
+      email,
+    });
+  },
+
+  async verifyEmailCode(verificationId: string, code: string) {
+    const bundle = await authFetch<AuthSessionBundle>(
+      '/_/auth/email/verify',
+      'POST',
+      { verificationId, code },
+    );
+    applySession(bundle);
+    return requireUser(bundle);
+  },
+
+  // -- SMS code flow --
+
+  sendSmsCode(phone: string) {
+    return authFetch<{ verificationId: string }>('/_/auth/sms/send', 'POST', {
+      phone,
+    });
+  },
+
+  async verifySmsCode(verificationId: string, code: string) {
+    const bundle = await authFetch<AuthSessionBundle>(
+      '/_/auth/sms/verify',
+      'POST',
+      { verificationId, code },
+    );
+    applySession(bundle);
+    return requireUser(bundle);
+  },
+
+  // -- Email/phone change --
+
+  async requestEmailChange(newEmail: string) {
+    await authFetch('/_/auth/email/change', 'POST', { newEmail });
+  },
+
+  async confirmEmailChange(newEmail: string, code: string) {
+    const bundle = await authFetch<AuthSessionBundle>(
+      '/_/auth/email/change/confirm',
+      'POST',
+      { newEmail, code },
+    );
+    applySession(bundle);
+    return requireUser(bundle);
+  },
+
+  async requestPhoneChange(newPhone: string) {
+    await authFetch('/_/auth/phone/change', 'POST', { newPhone });
+  },
+
+  async confirmPhoneChange(newPhone: string, code: string) {
+    const bundle = await authFetch<AuthSessionBundle>(
+      '/_/auth/phone/change/confirm',
+      'POST',
+      { newPhone, code },
+    );
+    applySession(bundle);
+    return requireUser(bundle);
+  },
+
+  // -- Session --
+
+  async logout() {
+    const bundle = await authFetch<AuthSessionBundle>(
+      '/_/auth/logout',
+      'POST',
+      {},
+    );
+    applySession(bundle);
+  },
+
+  // -- Helpers --
+
+  phone: {
+    countries: phoneHelpers.countries,
+    detectCountry: phoneHelpers.detectCountry,
+    format: phoneHelpers.format,
+    toE164: phoneHelpers.toE164,
+    isValid: phoneHelpers.isValid,
+  },
+
+  email: {
+    isValid: emailHelpers.isValid,
+  },
+};

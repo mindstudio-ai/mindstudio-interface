@@ -11,7 +11,7 @@
  */
 
 import { MindStudioInterfaceError } from './errors.js';
-import type { BootstrapConfig } from './types.js';
+import type { AppUser, BootstrapConfig } from './types.js';
 
 let _config: BootstrapConfig | undefined;
 
@@ -42,9 +42,9 @@ export function getConfig(): BootstrapConfig {
     );
   }
 
-  // Validate required fields
-  if (!raw.token || !raw.releaseId || !raw.user || !raw.methods) {
-    const missing = ['token', 'releaseId', 'user', 'methods']
+  // Validate required fields (user can be null for unauthenticated sessions)
+  if (!raw.token || !raw.releaseId || !raw.methods) {
+    const missing = ['token', 'releaseId', 'methods']
       .filter((k) => !raw[k as keyof BootstrapConfig])
       .join(', ');
 
@@ -56,4 +56,30 @@ export function getConfig(): BootstrapConfig {
 
   _config = raw as BootstrapConfig;
   return _config;
+}
+
+/**
+ * Update the cached config in-place after an auth state transition.
+ *
+ * The cached config is a mutable reference — all SDK modules read it
+ * on-demand via `getConfig()`, so mutations propagate immediately to
+ * method invocation, agent chat, uploads, etc.
+ *
+ * @internal Not exported from the package — used by the auth module only.
+ */
+export function updateConfig(updates: {
+  token?: string;
+  user?: AppUser | null;
+  methods?: Record<string, string>;
+}): void {
+  const config = getConfig();
+  if (updates.token !== undefined) {
+    config.token = updates.token;
+  }
+  if (updates.user !== undefined) {
+    config.user = updates.user;
+  }
+  if (updates.methods !== undefined) {
+    config.methods = updates.methods;
+  }
 }

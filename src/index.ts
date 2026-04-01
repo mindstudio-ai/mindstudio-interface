@@ -1,16 +1,16 @@
 /**
  * @mindstudio-ai/interface — Frontend SDK for MindStudio v2 app interfaces.
  *
- * Provides typed RPC to backend methods, file uploads, current user
- * context, and agent chat conversations. Runs inside web interfaces
- * with credentials injected by the platform via `window.__MINDSTUDIO__`.
+ * Provides typed RPC to backend methods, file uploads, authentication,
+ * and agent chat conversations. Runs inside web interfaces with
+ * credentials injected by the platform via `window.__MINDSTUDIO__`.
  *
  * ## Four exports
  *
  * - `createClient()` — typed method RPC client
  * - `createAgentChatClient()` — thread-based agent conversations
  * - `platform` — file upload actions
- * - `auth` — current user identity (display only)
+ * - `auth` — authentication flows, user state, and validation helpers
  *
  * @example
  * ```ts
@@ -24,20 +24,20 @@
  * const api = createClient();
  * const chat = createAgentChatClient();
  *
- * // Call backend methods
- * const dashboard = await api.getDashboard();
+ * // Check auth state
+ * if (!auth.isAuthenticated()) {
+ *   const { verificationId } = await auth.sendEmailCode('user@example.com');
+ *   await auth.verifyEmailCode(verificationId, code);
+ * }
  *
- * // Agent chat with streaming
- * const thread = await chat.createThread();
- * await chat.sendMessage(thread.id, 'Hello!', {
- *   onText: (delta) => process.stdout.write(delta),
- * });
+ * // Call backend methods (uses authenticated session)
+ * const dashboard = await api.getDashboard();
  *
  * // Upload a file
  * const url = await platform.uploadFile(file);
  *
- * // Display user info
- * console.log(auth.name, auth.profilePictureUrl);
+ * // Current user
+ * const user = auth.getCurrentUser();
  * ```
  */
 
@@ -56,6 +56,7 @@ export {
   type Message,
 } from './agent-chat.js';
 export { platform, type UploadFileOptions } from './platform.js';
-export { auth, type AuthContext } from './auth.js';
+export { auth, type Auth } from './auth.js';
 export { MindStudioInterfaceError } from './errors.js';
-export type { BootstrapConfig, BootstrapUser } from './types.js';
+export type { BootstrapConfig, AppUser } from './types.js';
+export type { Country } from './auth-phone.js';

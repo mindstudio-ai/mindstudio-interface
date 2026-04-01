@@ -2,7 +2,7 @@
 
 Frontend SDK for [MindStudio](https://mindstudio.ai) v2 app web interfaces.
 
-Typed RPC to backend methods, file uploads, agent chat, and user context — all from the browser. Zero dependencies.
+Typed RPC to backend methods, file uploads, authentication, and agent chat — all from the browser. Zero dependencies.
 
 ## Install
 
@@ -18,6 +18,13 @@ import { createClient, platform, auth } from '@mindstudio-ai/interface';
 const api = createClient();
 
 function App() {
+  const user = auth.getCurrentUser();
+
+  // Not logged in — show login
+  if (!user) {
+    return <LoginPage />;
+  }
+
   const [dashboard, setDashboard] = useState(null);
 
   useEffect(() => {
@@ -31,8 +38,7 @@ function App() {
 
   return (
     <div>
-      <p>Welcome, {auth.name}</p>
-      <img src={auth.profilePictureUrl} />
+      <p>Welcome, {user.email}</p>
       <input type="file" onChange={(e) => handleUpload(e.target.files[0])} />
     </div>
   );
@@ -75,16 +81,56 @@ const url = await platform.uploadFile(file);
 
 ### `auth`
 
-Current user's identity (read-only, synchronous):
+Authentication flows, user state, and validation helpers. The platform handles verification code delivery, cookie management, and user storage — you build the login UI.
 
-```ts
-auth.userId             // "uuid"
-auth.name               // "Sean"
-auth.email              // "sean@example.com"
-auth.profilePictureUrl  // "https://..." or null
+#### Login flow
+
+```tsx
+import { auth } from '@mindstudio-ai/interface';
+
+// Send a verification code
+const { verificationId } = await auth.sendEmailCode('user@example.com');
+
+// User enters the code in your UI...
+const user = await auth.verifyEmailCode(verificationId, code);
+// Session is now active — all SDK calls use the authenticated token
 ```
 
-For display purposes only. Role checking and permissions are handled by backend routes using `@mindstudio-ai/agent`.
+SMS works the same way — use `auth.sendSmsCode(phone)` and `auth.verifySmsCode(verificationId, code)`. Phone numbers must be E.164 format.
+
+#### User state
+
+```ts
+auth.getCurrentUser()    // { id, email, phone, roles, createdAt } or null
+auth.isAuthenticated()   // boolean
+await auth.logout()      // clears session
+```
+
+#### Phone helpers
+
+Utilities for building a phone input with country code picker:
+
+```ts
+auth.phone.countries          // [{ code: 'US', dialCode: '+1', name: 'United States', flag: '🇺🇸' }, ...]
+auth.phone.detectCountry()    // 'US' — guessed from timezone
+auth.phone.toE164('5551234567', 'US')  // '+15551234567'
+auth.phone.format('+15551234567')      // '+1 (555) 123-4567'
+auth.phone.isValid('+15551234567')     // true
+auth.email.isValid('user@example.com') // true
+```
+
+#### Email/phone change
+
+Authenticated users can change their email or phone through a verification flow:
+
+```ts
+await auth.requestEmailChange('new@example.com');
+await auth.confirmEmailChange('new@example.com', code);
+```
+
+#### Session management
+
+Verify, confirm, and logout methods update the SDK's internal session in-place. All downstream calls (method invocation, agent chat, uploads) immediately use the new authenticated (or unauthenticated) session. No page refresh needed.
 
 ### `createAgentChatClient()`
 
@@ -220,9 +266,11 @@ try {
 
 ## How it works
 
-The MindStudio platform injects `window.__MINDSTUDIO__` into the page before your code runs. This contains the session token, user info, and method registry. The SDK reads this automatically — no configuration needed.
+The MindStudio platform injects `window.__MINDSTUDIO__` into the page before your code runs. This contains the session token, authenticated user (or `null`), and method registry. The SDK reads this automatically — no configuration needed.
 
-All API calls use same-origin `/_/` paths (e.g. `/_/methods/{id}/invoke`, `/_/agent/threads`). The platform proxy resolves the app from the subdomain — no cross-origin requests or app IDs in URLs. This works identically in production and local dev.
+All API calls use same-origin `/_/` paths (e.g. `/_/methods/{id}/invoke`, `/_/agent/threads`, `/_/auth/email/send`). The platform proxy resolves the app from the subdomain — no cross-origin requests or app IDs in URLs. This works identically in production and local dev.
+
+Authentication is cookie-based (`HttpOnly`, `Secure`, `SameSite=Lax`). The SDK never touches the cookie directly — it's set by the server on verify and cleared on logout. Auth state transitions (login, logout, email/phone change) return a fresh session token which the SDK applies in-place, so all subsequent API calls use the new session without a page refresh.
 
 ## License
 
