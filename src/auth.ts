@@ -97,12 +97,15 @@ async function authFetch<T>(
   return (await res.json()) as T;
 }
 
+const authListeners: Set<(user: AppUser | null) => void> = new Set();
+
 function applySession(bundle: AuthSessionBundle): void {
   updateConfig({
     token: bundle.token,
     user: bundle.user,
     methods: bundle.methods,
   });
+  authListeners.forEach((cb) => cb(bundle.user));
 }
 
 function requireUser(bundle: AuthSessionBundle): AppUser {
@@ -119,9 +122,26 @@ function requireUser(bundle: AuthSessionBundle): AppUser {
 // Auth interface
 // ---------------------------------------------------------------------------
 
-/** The auth namespace — authentication flows, state, and helpers. */
+/**
+ * The auth namespace — authentication flows, state, and helpers.
+ *
+ * Auth methods throw {@link MindStudioInterfaceError} on failure.
+ * Common error codes:
+ *
+ * | Code | Status | Meaning |
+ * |------|--------|---------|
+ * | `rate_limited` | 429 | Too many code requests (max 5 per 15 min per identifier) |
+ * | `invalid_code` | 400 | Wrong verification code |
+ * | `verification_expired` | 400 | Code expired (10 min TTL) — request a new one |
+ * | `max_attempts_exceeded` | 400 | Too many incorrect attempts (max 3) — request a new code |
+ * | `not_authenticated` | 401 | Auth cookie missing (change/logout endpoints) |
+ * | `invalid_session` | 401 | Auth cookie expired or invalid |
+ */
 export interface Auth {
   // -- State --
+
+  /** The current authenticated user, or `null` if not authenticated. */
+  readonly currentUser: AppUser | null;
 
   /** Get the current authenticated user, or `null` if not authenticated. */
   getCurrentUser(): AppUser | null;
@@ -170,6 +190,25 @@ export interface Auth {
   /** Log out. Clears the cookie and updates the session to unauthenticated. */
   logout(): Promise<void>;
 
+  /**
+   * Subscribe to auth state changes. Fires immediately with the
+   * current state, then again whenever verify, confirm, or logout
+   * updates the session.
+   *
+   * @returns An unsubscribe function.
+   *
+   * @example
+   * ```ts
+   * // React hook
+   * function useAuth() {
+   *   const [user, setUser] = useState<AppUser | null>(null);
+   *   useEffect(() => auth.onAuthStateChanged(setUser), []);
+   *   return user;
+   * }
+   * ```
+   */
+  onAuthStateChanged(callback: (user: AppUser | null) => void): () => void;
+
   // -- Helpers --
 
   /** Phone number utilities — countries, formatting, validation. */
@@ -199,6 +238,10 @@ export interface Auth {
 
 export const auth: Auth = {
   // -- State --
+
+  get currentUser() {
+    return getConfig().user;
+  },
 
   getCurrentUser() {
     return getConfig().user;
@@ -283,6 +326,14 @@ export const auth: Auth = {
       {},
     );
     applySession(bundle);
+  },
+
+  onAuthStateChanged(callback: (user: AppUser | null) => void) {
+    authListeners.add(callback);
+    callback(getConfig().user);
+    return () => {
+      authListeners.delete(callback);
+    };
   },
 
   // -- Helpers --

@@ -13,33 +13,36 @@ npm install @mindstudio-ai/interface
 ## Usage
 
 ```tsx
-import { createClient, platform, auth } from '@mindstudio-ai/interface';
+import { createClient, platform, auth, type AppUser } from '@mindstudio-ai/interface';
 
 const api = createClient();
 
+// Reactive auth state — re-renders on login/logout
+function useAuth() {
+  const [user, setUser] = useState<AppUser | null>(null);
+  useEffect(() => auth.onAuthStateChanged(setUser), []);
+  return user;
+}
+
 function App() {
-  const user = auth.getCurrentUser();
+  const user = useAuth();
 
-  // Not logged in — show login
-  if (!user) {
-    return <LoginPage />;
-  }
+  if (!user) return <LoginPage />;
 
-  const [dashboard, setDashboard] = useState(null);
+  return <Dashboard user={user} />;
+}
+
+function Dashboard({ user }: { user: AppUser }) {
+  const [data, setData] = useState(null);
 
   useEffect(() => {
-    api.getDashboard().then(setDashboard);
+    api.getDashboard().then(setData);
   }, []);
-
-  const handleUpload = async (file: File) => {
-    const url = await platform.uploadFile(file);
-    // use the CDN url...
-  };
 
   return (
     <div>
       <p>Welcome, {user.email}</p>
-      <input type="file" onChange={(e) => handleUpload(e.target.files[0])} />
+      <button onClick={() => auth.logout()}>Log out</button>
     </div>
   );
 }
@@ -126,6 +129,49 @@ Authenticated users can change their email or phone through a verification flow:
 ```ts
 await auth.requestEmailChange('new@example.com');
 await auth.confirmEmailChange('new@example.com', code);
+```
+
+#### Reactive auth state
+
+`onAuthStateChanged` fires immediately with the current user, then again on every auth transition. Use it to build reactive UIs:
+
+```ts
+// React hook
+function useAuth() {
+  const [user, setUser] = useState<AppUser | null>(null);
+  useEffect(() => auth.onAuthStateChanged(setUser), []);
+  return user;
+}
+```
+
+You can also read the current user synchronously via `auth.currentUser`.
+
+#### Auth error codes
+
+Auth methods throw `MindStudioInterfaceError`. Handle specific cases via `err.code`:
+
+| Code | Status | Meaning |
+|------|--------|---------|
+| `rate_limited` | 429 | Too many code requests (max 5 per 15 min) |
+| `invalid_code` | 400 | Wrong verification code |
+| `verification_expired` | 400 | Code expired (10 min TTL) |
+| `max_attempts_exceeded` | 400 | Too many incorrect attempts (max 3) |
+| `not_authenticated` | 401 | No auth session (change/logout endpoints) |
+| `invalid_session` | 401 | Session expired or invalid |
+
+```ts
+try {
+  await auth.verifyEmailCode(verificationId, code);
+} catch (err) {
+  if (err instanceof MindStudioInterfaceError) {
+    if (err.code === 'invalid_code') {
+      showError('Wrong code, try again');
+    } else if (err.code === 'verification_expired') {
+      showError('Code expired — sending a new one');
+      await auth.sendEmailCode(email);
+    }
+  }
+}
 ```
 
 #### Session management
