@@ -131,6 +131,19 @@ await auth.requestEmailChange('new@example.com');
 await auth.confirmEmailChange('new@example.com', code);
 ```
 
+#### API keys
+
+Apps with `api-key` in their auth methods can let users generate keys for programmatic access:
+
+```ts
+const { key } = await auth.createApiKey();   // full key (sk_...), shown once
+console.log(auth.currentUser?.apiKey);       // masked: "sk_...a1b2"
+
+await auth.revokeApiKey();                   // apiKey becomes null
+```
+
+Both methods trigger `onAuthStateChanged` since the user's `apiKey` field changes.
+
 #### Reactive auth state
 
 `onAuthStateChanged` fires immediately with the current user, then again on every auth transition. Use it to build reactive UIs:
@@ -156,8 +169,9 @@ Auth methods throw `MindStudioInterfaceError`. Handle specific cases via `err.co
 | `invalid_code` | 400 | Wrong verification code |
 | `verification_expired` | 400 | Code expired (10 min TTL) |
 | `max_attempts_exceeded` | 400 | Too many incorrect attempts (max 3) |
-| `not_authenticated` | 401 | No auth session (change/logout endpoints) |
+| `not_authenticated` | 401 | No auth session (change/logout/api-key endpoints) |
 | `invalid_session` | 401 | Session expired or invalid |
+| `not_supported` | 400 | Feature not enabled (e.g. api-key auth not in app methods) |
 
 ```ts
 try {

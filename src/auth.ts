@@ -118,6 +118,14 @@ function requireUser(bundle: AuthSessionBundle): AppUser {
   return bundle.user;
 }
 
+function updateUserAndNotify(update: Partial<AppUser>): void {
+  const config = getConfig();
+  if (config.user) {
+    Object.assign(config.user, update);
+    authListeners.forEach((cb) => cb(config.user));
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Auth interface
 // ---------------------------------------------------------------------------
@@ -189,6 +197,26 @@ export interface Auth {
 
   /** Log out. Clears the cookie and updates the session to unauthenticated. */
   logout(): Promise<void>;
+
+  // -- API keys --
+
+  /**
+   * Generate an API key for the current user. Returns the full key
+   * (shown once). The user's `apiKey` field updates to the masked
+   * value and `onAuthStateChanged` fires.
+   *
+   * @throws `not_authenticated` (401) if no session
+   * @throws `not_supported` (400) if api-key auth is not enabled
+   */
+  createApiKey(): Promise<{ key: string }>;
+
+  /**
+   * Revoke the current user's API key. The user's `apiKey` field
+   * becomes `null` and `onAuthStateChanged` fires.
+   *
+   * @throws `not_authenticated` (401) if no session
+   */
+  revokeApiKey(): Promise<void>;
 
   /**
    * Subscribe to auth state changes. Fires immediately with the
@@ -326,6 +354,21 @@ export const auth: Auth = {
       {},
     );
     applySession(bundle);
+  },
+
+  async createApiKey() {
+    const result = await authFetch<{ key: string; apiKey: string }>(
+      '/_/auth/api-key/create',
+      'POST',
+      {},
+    );
+    updateUserAndNotify({ apiKey: result.apiKey });
+    return { key: result.key };
+  },
+
+  async revokeApiKey() {
+    await authFetch('/_/auth/api-key/revoke', 'POST', {});
+    updateUserAndNotify({ apiKey: null });
   },
 
   onAuthStateChanged(callback: (user: AppUser | null) => void) {

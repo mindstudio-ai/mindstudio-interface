@@ -29,6 +29,9 @@ export interface AppUser {
   /** Role IDs assigned to this user. */
   roles: string[];
 
+  /** Masked API key (e.g. "sk_...a1b2"), or null if no key exists. */
+  apiKey: string | null;
+
   /** ISO 8601 timestamp of when the user was created. */
   createdAt: string;
 }

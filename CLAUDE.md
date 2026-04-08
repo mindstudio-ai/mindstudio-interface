@@ -108,6 +108,10 @@ await auth.confirmEmailChange('new@example.com', '123456');
 // Logout
 await auth.logout();
 
+// API keys (requires authentication, app must have api-key auth enabled)
+const { key } = await auth.createApiKey();  // full key, shown once
+await auth.revokeApiKey();                  // user.apiKey becomes null
+
 // Phone helpers
 auth.phone.countries          // [{ code: 'US', dialCode: '+1', name: 'United States', flag: '🇺🇸' }, ...]
 auth.phone.detectCountry()    // 'US' (from timezone)
@@ -121,9 +125,9 @@ auth.email.isValid('user@example.com') // true
 
 Verify/confirm/logout methods update `window.__MINDSTUDIO__` in-place with the returned `{ user, token, methods }` bundle. All downstream calls (method invocation, agent chat, uploads) immediately use the new session.
 
-**User shape (`AppUser`):** `{ id, email, phone, roles, createdAt }` — same everywhere (bootstrap, API responses, `getCurrentUser()`). `null` means unauthenticated.
+**User shape (`AppUser`):** `{ id, email, phone, roles, apiKey, createdAt }` — same everywhere (bootstrap, API responses, `getCurrentUser()`). `null` means unauthenticated.
 
-**Endpoints:** `/_/auth/email/send`, `/_/auth/email/verify`, `/_/auth/sms/send`, `/_/auth/sms/verify`, `/_/auth/email/change`, `/_/auth/email/change/confirm`, `/_/auth/phone/change`, `/_/auth/phone/change/confirm`, `/_/auth/logout`, `/_/auth/me`.
+**Endpoints:** `/_/auth/email/send`, `/_/auth/email/verify`, `/_/auth/sms/send`, `/_/auth/sms/verify`, `/_/auth/email/change`, `/_/auth/email/change/confirm`, `/_/auth/phone/change`, `/_/auth/phone/change/confirm`, `/_/auth/logout`, `/_/auth/me`, `/_/auth/api-key/create`, `/_/auth/api-key/revoke`.
 
 ### Agent chat (`createAgentChatClient`)
 
