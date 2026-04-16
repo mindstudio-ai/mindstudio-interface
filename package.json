@@ -1,6 +1,6 @@
 {
   "name": "@mindstudio-ai/interface",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Frontend SDK for MindStudio v2 app interfaces",
   "type": "module",
   "main": "./dist/index.js",
