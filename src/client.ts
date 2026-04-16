@@ -120,15 +120,16 @@ export interface InvokeOptions {
   onToken?: (text: string) => void;
 
   /**
-   * Called if a stream-level error occurs.
+   * Called if a stream-level error event arrives.
    *
-   * Stream errors are non-fatal at the protocol level — the method may
-   * still complete and resolve with a final output. Use this callback for
-   * logging or showing a transient warning, not for control flow.
+   * If the stream then closes without a `done` event, the method rejects
+   * with a `MindStudioInterfaceError` containing the error message (code
+   * `method_error`). If a `done` event does arrive after the error, the
+   * method resolves with the final output — in that case this callback
+   * is just for logging or showing a transient warning.
    *
-   * If the stream ends without a `done` event, the method rejects with a
-   * `MindStudioInterfaceError` (code `stream_incomplete`) regardless of
-   * whether `onStreamError` was provided.
+   * If the stream ends without either a `done` or `error` event, the
+   * method rejects with `stream_incomplete`.
    */
   onStreamError?: (error: string) => void;
 }
@@ -234,6 +235,7 @@ export function createClient<T = DefaultMethodClient>(): T {
         const decoder = new TextDecoder();
         let buffer = '';
         let finalOutput: unknown;
+        let streamError: string | undefined;
 
         while (true) {
           const { done, value } = await reader.read();
@@ -261,6 +263,7 @@ export function createClient<T = DefaultMethodClient>(): T {
               if (event.type === 'token' && options?.onToken && event.text) {
                 options.onToken(event.text);
               } else if (event.type === 'error' && event.error) {
+                streamError = event.error;
                 if (options?.onStreamError) {
                   options.onStreamError(event.error);
                 }
@@ -271,6 +274,12 @@ export function createClient<T = DefaultMethodClient>(): T {
               // Skip malformed SSE lines
             }
           }
+        }
+
+        // If the stream errored and didn't produce a final output,
+        // surface the error message from the error event.
+        if (finalOutput === undefined && streamError !== undefined) {
+          throw new MindStudioInterfaceError(streamError, 'method_error');
         }
 
         if (finalOutput === undefined) {
