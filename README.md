@@ -106,8 +106,11 @@ SMS works the same way — use `auth.sendSmsCode(phone)` and `auth.verifySmsCode
 ```ts
 auth.getCurrentUser()    // { id, email, phone, roles, createdAt } or null
 auth.isAuthenticated()   // boolean
+auth.currentVisitorId    // stable per-browser, per-app opaque ID (or null)
 await auth.logout()      // clears session
 ```
+
+`currentVisitorId` is a stable identifier for this browser on this app, backed by a server-set HttpOnly cookie. It's the user's platform user ID when authenticated, a per-browser UUID when not. Persists ~1 year and updates in-place on login/logout. Useful for app-side analytics, "welcome back" UX for guests, or per-visitor preferences stored in your app's data DB.
 
 #### Phone helpers
 
@@ -331,6 +334,37 @@ The MindStudio platform injects `window.__MINDSTUDIO__` into the page before you
 All API calls use same-origin `/_/` paths (e.g. `/_/methods/{id}/invoke`, `/_/agent/threads`, `/_/auth/email/send`). The platform proxy resolves the app from the subdomain — no cross-origin requests or app IDs in URLs. This works identically in production and local dev.
 
 Authentication is cookie-based (`HttpOnly`, `Secure`, `SameSite=Lax`). The SDK never touches the cookie directly — it's set by the server on verify and cleared on logout. Auth state transitions (login, logout, email/phone change) return a fresh session token which the SDK applies in-place, so all subsequent API calls use the new session without a page refresh.
+
+## Error reporting
+
+Uncaught errors and unhandled promise rejections are automatically captured and shipped to the platform for bucketing + dashboards. No setup required — install happens on first SDK access. Reports include the error, a stack, and a breadcrumb trail of recent navigations + network calls for context.
+
+Opt out per app via bootstrap config:
+
+```ts
+window.__MINDSTUDIO__.telemetry = { errors: false };
+```
+
+Failed-fetch breadcrumbs can optionally include response bodies (off by default; enable both client-side via `window.__MINDSTUDIO__.telemetryCaptureResponseBodies = true` and via the per-app setting in the dashboard).
+
+## Analytics
+
+Visitor analytics — pageviews, referrers, UTMs, geo, devices — Plausible/Fathom style. Pageviews are tracked automatically on every history change (`pushState`, `replaceState`, `popstate`, `hashchange`). Server-side enrichment handles geo, UA parsing, UTM extraction, and sessionization. Aggregate visitor metrics are surfaced through the platform dashboard to the app owner.
+
+```ts
+import { analytics } from '@mindstudio-ai/interface';
+
+// Custom events (optional — pageviews track automatically)
+analytics.track('vendor_submitted', { vendorType: 'restaurant' });
+```
+
+Custom event props must be flat primitives (`string | number | boolean`) — non-primitive values are stripped client-side before send.
+
+Opt out per app via bootstrap config:
+
+```ts
+window.__MINDSTUDIO__.telemetry = { analytics: false };
+```
 
 ## License
 

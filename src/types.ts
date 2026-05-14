@@ -45,6 +45,7 @@ export interface AuthSessionBundle {
   user: AppUser | null;
   token: string;
   methods: Record<string, string>;
+  visitorId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -90,4 +91,40 @@ export interface BootstrapConfig {
    * ```
    */
   methods: Record<string, string>;
+
+  /**
+   * Stable opaque identifier for this browser on this app.
+   *
+   * Backed by a server-set HttpOnly cookie scoped to the exact
+   * subdomain. For authenticated sessions this is the user's
+   * platform user ID; for guest sessions it's a per-browser UUID.
+   * Cleared and re-minted on login/logout transitions.
+   *
+   * Optional in the type for back-compat with cached bootstraps
+   * from before this field was added — typically always present.
+   */
+  visitorId?: string;
+
+  /**
+   * Telemetry feature toggles. Each surface defaults to enabled.
+   * Set to `false` to opt out of automatic capture.
+   */
+  telemetry?: {
+    /** Auto-capture uncaught errors + unhandled promise rejections. @default true */
+    errors?: boolean;
+    /** Auto-track pageviews and enable `analytics.track()`. @default true */
+    analytics?: boolean;
+  };
+
+  /**
+   * If `true`, failed-fetch breadcrumbs (status >= 400) attached to
+   * error reports include the response body, truncated to ~1KB.
+   *
+   * The platform enforces redaction server-side via the per-app
+   * setting — so even if a stale SDK sends bodies, the server strips
+   * them unless the app has opted in. Belt and suspenders.
+   *
+   * @default false
+   */
+  telemetryCaptureResponseBodies?: boolean;
 }

@@ -57,6 +57,12 @@ export {
 } from './agent-chat.js';
 export { platform, type UploadFileOptions } from './platform.js';
 export { auth, type Auth } from './auth.js';
+export {
+  analytics,
+  type AnalyticsClient,
+  type CustomEventProps,
+} from './telemetry-analytics.js';
 export { MindStudioInterfaceError } from './errors.js';
 export type { BootstrapConfig, AppUser } from './types.js';
 export type { Country } from './auth-phone.js';
+export type { Breadcrumb } from './telemetry-breadcrumbs.js';

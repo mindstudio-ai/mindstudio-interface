@@ -104,6 +104,7 @@ function applySession(bundle: AuthSessionBundle): void {
     token: bundle.token,
     user: bundle.user,
     methods: bundle.methods,
+    visitorId: bundle.visitorId,
   });
   authListeners.forEach((cb) => cb(bundle.user));
 }
@@ -156,6 +157,20 @@ export interface Auth {
 
   /** Whether the current session is authenticated. */
   isAuthenticated(): boolean;
+
+  /**
+   * The stable per-browser, per-app visitor identifier, or `null` if
+   * unavailable (e.g. cached bootstrap from before this field existed).
+   *
+   * Opaque string backed by a server-set HttpOnly cookie. For authed
+   * sessions this is the user's platform user ID; for guests it's a
+   * per-browser UUID. Persists ~1 year; refreshed on each page load.
+   * Updates in-place on login/logout transitions.
+   */
+  readonly currentVisitorId: string | null;
+
+  /** Get the current visitor ID, or `null` if unavailable. */
+  getCurrentVisitorId(): string | null;
 
   // -- Email code flow --
 
@@ -277,6 +292,14 @@ export const auth: Auth = {
 
   isAuthenticated() {
     return getConfig().user !== null;
+  },
+
+  get currentVisitorId() {
+    return getConfig().visitorId ?? null;
+  },
+
+  getCurrentVisitorId() {
+    return getConfig().visitorId ?? null;
   },
 
   // -- Email code flow --

@@ -18,6 +18,9 @@ src/
   config.ts         — reads window.__MINDSTUDIO__, validates, caches, updateConfig()
   errors.ts         — MindStudioInterfaceError class
   types.ts          — BootstrapConfig, AppUser, AuthSessionBundle
+  telemetry-errors.ts       — auto error capture + batched transport to /_/telemetry/errors
+  telemetry-breadcrumbs.ts  — ring buffer + fetch/XHR/history patches; exposes onNavigation()
+  telemetry-analytics.ts    — auto pageviews + analytics.track() to /_/telemetry/events
 ```
 
 ## Key commands
@@ -123,9 +126,11 @@ auth.phone.isValid('+15551234567')     // true
 auth.email.isValid('user@example.com') // true
 ```
 
-Verify/confirm/logout methods update `window.__MINDSTUDIO__` in-place with the returned `{ user, token, methods }` bundle. All downstream calls (method invocation, agent chat, uploads) immediately use the new session.
+Verify/confirm/logout methods update `window.__MINDSTUDIO__` in-place with the returned `{ user, token, methods, visitorId }` bundle. All downstream calls (method invocation, agent chat, uploads) immediately use the new session.
 
 **User shape (`AppUser`):** `{ id, email, phone, roles, apiKey, createdAt }` — same everywhere (bootstrap, API responses, `getCurrentUser()`). `null` means unauthenticated.
+
+**Visitor ID:** `auth.currentVisitorId` returns a stable per-browser, per-app opaque string. Backed by a server-set HttpOnly cookie scoped to the exact subdomain; persists ~1 year (rolling). For authed sessions it's the user's platform user ID; for guests it's a per-browser UUID. Updates automatically on login/logout transitions alongside `currentUser`. Useful for app-side analytics, "welcome back" UX for guests, per-visitor preferences keyed in the app DB.
 
 **Endpoints:** `/_/auth/email/send`, `/_/auth/email/verify`, `/_/auth/sms/send`, `/_/auth/sms/verify`, `/_/auth/email/change`, `/_/auth/email/change/confirm`, `/_/auth/phone/change`, `/_/auth/phone/change/confirm`, `/_/auth/logout`, `/_/auth/me`, `/_/auth/api-key/create`, `/_/auth/api-key/revoke`.
 
@@ -165,6 +170,59 @@ Stateless client — thread CRUD and message streaming over SSE. The app manages
 **SSE events:** `text`, `thinking`, `thinking_complete`, `tool_use`, `tool_input_delta`, `tool_call_start`, `tool_call_result`, `done`, `error`. Named callbacks for common events + `onEvent` catch-all for the full discriminated union.
 
 **Abort:** `sendMessage` returns an `AbortablePromise` — a Promise with `.abort()`. Also accepts `signal` in callbacks for `AbortController` integration.
+
+### Error reporting (telemetry)
+
+Auto-captures uncaught errors + unhandled promise rejections and ships them to `/_/telemetry/errors` for backend bucketing/dashboards. **No public API** — install is a side effect of the first `getConfig()` call (i.e. the first SDK access).
+
+```ts
+// Auto-installed on first SDK use. Nothing to import or call.
+
+// Opt out per app via bootstrap config:
+window.__MINDSTUDIO__.telemetry = { errors: false };
+```
+
+**What's captured per event:** `type`, `message`, `stack`, `source`/`line`/`column`, plus SDK context (`releaseId`, `url`, `userAgent`, `timestamp`) and a snapshot of breadcrumbs (last ~20 navigations + fetch/XHR calls). User identity is derived server-side from the session token; client-supplied `userId` / `visitorId` are ignored.
+
+**Breadcrumbs** are collected via three monkeypatches: `history.pushState`/`replaceState`/`popstate` for navigation, `window.fetch` and `XMLHttpRequest` for network calls. All idempotent (HMR-safe). Calls to `/_/telemetry/*` are excluded to prevent reporting loops.
+
+**Transport:** batched ~1s debounce, max 50 events per POST. Within-batch dedupe via `count: N` on events with identical `message + first-stack-line`. Drains via `fetch` with `keepalive: true` on `pagehide` / `visibilitychange === 'hidden'`. Respects `429` + `Retry-After`. Any transport failure is silently swallowed — telemetry never crashes the host app.
+
+**Response body capture:** `window.__MINDSTUDIO__.telemetryCaptureResponseBodies = true` attaches truncated (~1KB) response bodies to failed-fetch breadcrumbs. Off by default. Backend strips the field unless the per-app setting is also enabled.
+
+**First-paint errors:** the SDK installs on first `getConfig()` call, so errors thrown before any SDK access aren't captured. Apps wanting earliest capture can touch any SDK accessor (e.g. `auth.currentUser`) at app entry.
+
+**Endpoint:** `POST /_/telemetry/errors` — same Bearer session token as everywhere else.
+
+### Analytics (`analytics`)
+
+Plausible/Fathom-style visitor analytics. Auto-tracks pageviews on every history change. Public API is a single method:
+
+```ts
+import { analytics } from '@mindstudio-ai/interface';
+
+// Custom events (optional — pageviews track automatically)
+analytics.track('vendor_submitted', { vendorType: 'restaurant' });
+
+// Opt out per app via bootstrap config:
+window.__MINDSTUDIO__.telemetry = { analytics: false };
+```
+
+**Auto-pageviews:** subscribes to navigation events from `telemetry-breadcrumbs.ts` (one set of history patches shared across error breadcrumbs + analytics). Hooks `pushState`, `replaceState`, `popstate`, `hashchange`. Fires an initial pageview on install. Naturally de-dupes identical-URL consecutive navigations.
+
+**What's sent per pageview:** `type: 'pageview'`, `releaseId`, `url` (full `location.href`), `referrer`, `userAgent`, `language`, `screen: { w, h }`, `timestamp`. Server enriches with geo (IP → country), device class + browser + OS (UA parsing), UTMs (query string), and visitor identity (from session). SDK does none of that parsing.
+
+**Custom events:** `analytics.track(name, props?)`. Props must be flat primitives (`string | number | boolean`); non-primitive values are stripped client-side before send. Server caps further (name ≤200 chars, 10 keys × 50-char keys × 500-char values).
+
+**Transport:** batched ~1s debounce, max 100 events per POST. Drains via `fetch` with `keepalive: true` on `pagehide` / `visibilitychange === 'hidden'`. Respects `429 + Retry-After`. Silently swallows all failures.
+
+**URL scrubbing:** server enforces a query-string whitelist (UTMs + a few common params). SDK sends raw `location.href`; backend strips before storage. Belt-and-suspenders.
+
+**Presence (silent):** the SDK opens a long-lived SSE connection to `/_/telemetry/presence` on install and holds it open as a heartbeat — the connection itself is the "visitor is online" signal. Any count data the server pushes over it is read-and-discarded; the SDK never surfaces presence info to app code. Tab close / network drop closes the connection; server immediately knows the visitor is gone. Auto-reconnects with exponential backoff (1s/2s/5s/10s + jitter); handles `503` via `Retry-After`; stops on `401`.
+
+**Privacy posture — no visitor-facing presence API:** aggregate visitor metrics (including live count) are surfaced only through the platform dashboard to the app owner. The SDK intentionally exposes no live-count or presence/aggregate-visitor API to app code — visitors must not be able to learn about other visitors' presence through the SDK. Apps that want presence as a designed feature (e.g. multiplayer experiences) must build it at the application level with their own consent semantics.
+
+**Endpoints:** `POST /_/telemetry/events` (batched ingest), `GET /_/telemetry/presence` (silent heartbeat connection — SDK opens, discards data).
 
 ## Architecture notes
 

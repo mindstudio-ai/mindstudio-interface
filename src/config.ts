@@ -11,6 +11,8 @@
  */
 
 import { MindStudioInterfaceError } from './errors.js';
+import { maybeInstallAnalytics } from './telemetry-analytics.js';
+import { maybeInstallTelemetry } from './telemetry-errors.js';
 import type { AppUser, BootstrapConfig } from './types.js';
 
 let _config: BootstrapConfig | undefined;
@@ -55,6 +57,12 @@ export function getConfig(): BootstrapConfig {
   }
 
   _config = raw as BootstrapConfig;
+
+  // Auto-install telemetry surfaces on first successful config read.
+  // Both are idempotent + try/caught — telemetry must never break getConfig().
+  maybeInstallTelemetry();
+  maybeInstallAnalytics();
+
   return _config;
 }
 
@@ -71,6 +79,7 @@ export function updateConfig(updates: {
   token?: string;
   user?: AppUser | null;
   methods?: Record<string, string>;
+  visitorId?: string;
 }): void {
   const config = getConfig();
   if (updates.token !== undefined) {
@@ -81,5 +90,8 @@ export function updateConfig(updates: {
   }
   if (updates.methods !== undefined) {
     config.methods = updates.methods;
+  }
+  if (updates.visitorId !== undefined) {
+    config.visitorId = updates.visitorId;
   }
 }
