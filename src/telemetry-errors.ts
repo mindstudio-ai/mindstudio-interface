@@ -4,8 +4,14 @@
  *
  * ## How it works
  *
- * Installed by `maybeInstallTelemetry()` in `config.ts` on the first
- * `getConfig()` call. Once installed:
+ * Installed by `maybeInstallTelemetry()`, which is called by `getConfig()`
+ * in `config.ts`. `getConfig()` runs automatically on the next tick after
+ * SDK import when the platform bootstrap is present (see eager-init block
+ * in `src/index.ts`), so installation happens at page load without app
+ * code needing to invoke anything. Falls back to lazy install on first
+ * SDK use if eager init was skipped (SSR / tests / no bootstrap).
+ *
+ * Once installed:
  *
  * 1. `window.error` and `unhandledrejection` listeners enqueue events
  *    into a pending batch (max 50 per batch — the server cap).

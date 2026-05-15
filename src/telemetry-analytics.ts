@@ -18,8 +18,14 @@
  *
  * ## How it works
  *
- * Installed by `maybeInstallAnalytics()` in `config.ts` on the first
- * `getConfig()` call. Once installed:
+ * Installed by `maybeInstallAnalytics()`, which is called by `getConfig()`
+ * in `config.ts`. `getConfig()` runs automatically on the next tick after
+ * SDK import when the platform bootstrap is present (see eager-init block
+ * in `src/index.ts`), so pageview tracking + presence are live at page
+ * load without app code needing to invoke anything. Falls back to lazy
+ * install on first SDK use if eager init was skipped.
+ *
+ * Once installed:
  *
  * 1. Subscribes to navigation events from `telemetry-breadcrumbs.ts`
  *    and emits a pageview on each change.

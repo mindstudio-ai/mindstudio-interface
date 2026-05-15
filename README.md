@@ -337,7 +337,7 @@ Authentication is cookie-based (`HttpOnly`, `Secure`, `SameSite=Lax`). The SDK n
 
 ## Error reporting
 
-Uncaught errors and unhandled promise rejections are automatically captured and shipped to the platform for bucketing + dashboards. No setup required — install happens on first SDK access. Reports include the error, a stack, and a breadcrumb trail of recent navigations + network calls for context.
+Uncaught errors and unhandled promise rejections are automatically captured and shipped to the platform for bucketing + dashboards. No setup required — install happens automatically on page load (next tick after the SDK module loads). Reports include the error, a stack, and a breadcrumb trail of recent navigations + network calls for context.
 
 Opt out per app via bootstrap config:
 

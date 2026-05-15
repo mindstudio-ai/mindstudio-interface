@@ -173,10 +173,10 @@ Stateless client — thread CRUD and message streaming over SSE. The app manages
 
 ### Error reporting (telemetry)
 
-Auto-captures uncaught errors + unhandled promise rejections and ships them to `/_/telemetry/errors` for backend bucketing/dashboards. **No public API** — install is a side effect of the first `getConfig()` call (i.e. the first SDK access).
+Auto-captures uncaught errors + unhandled promise rejections and ships them to `/_/telemetry/errors` for backend bucketing/dashboards. **No public API** — install runs automatically on the next tick after SDK import when the platform bootstrap is present, so error capture is live at page load.
 
 ```ts
-// Auto-installed on first SDK use. Nothing to import or call.
+// Auto-installed at page load (when bootstrap is present). Nothing to import or call.
 
 // Opt out per app via bootstrap config:
 window.__MINDSTUDIO__.telemetry = { errors: false };
@@ -190,7 +190,7 @@ window.__MINDSTUDIO__.telemetry = { errors: false };
 
 **Response body capture:** `window.__MINDSTUDIO__.telemetryCaptureResponseBodies = true` attaches truncated (~1KB) response bodies to failed-fetch breadcrumbs. Off by default. Backend strips the field unless the per-app setting is also enabled.
 
-**First-paint errors:** the SDK installs on first `getConfig()` call, so errors thrown before any SDK access aren't captured. Apps wanting earliest capture can touch any SDK accessor (e.g. `auth.currentUser`) at app entry.
+**First-paint errors:** the SDK installs on the next tick after import (via `setTimeout(0)` in `src/index.ts`). Errors thrown synchronously before that microtask resolves aren't captured — but anything inside the first event-loop turn (component render, mount effects, user interactions) is.
 
 **Endpoint:** `POST /_/telemetry/errors` — same Bearer session token as everywhere else.
 
@@ -229,7 +229,7 @@ window.__MINDSTUDIO__.telemetry = { analytics: false };
 - **Zero runtime dependencies.** Uses built-in `fetch` only.
 - **ESM only.** `"type": "module"` in package.json.
 - **Browser-only.** No Node.js APIs.
-- **Lazy initialization.** `getConfig()` reads `window.__MINDSTUDIO__` on first property access, not on import. Safe for SSR/test environments as long as you don't call methods.
+- **Eager-when-bootstrapped, lazy-otherwise initialization.** When `window.__MINDSTUDIO__` is present at SDK import time, `getConfig()` runs on the next tick automatically so telemetry surfaces (errors, analytics, presence) install at page load — apps don't need to "touch" the SDK at boot to get this. In environments without the bootstrap (SSR/Node, tests, dev without platform context), the eager call is skipped and the SDK stays silent until something invokes a method, at which point `getConfig()` runs lazily as before.
 - **Proxy-based client.** `createClient()` returns a Proxy — any property access creates an async invoker function. No code generation needed.
 - **Session tokens.** Short-lived (`ms_iface_...`), scoped to app + user. Can only invoke that app's methods. Cannot access db/auth directly — those are backend concerns.
 
