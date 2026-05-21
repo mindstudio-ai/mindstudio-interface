@@ -26,20 +26,29 @@
  *
  * ## Streaming
  *
- * Methods can optionally stream LLM token output via SSE. Pass
- * `{ stream: true }` as the second argument along with an `onToken`
- * callback to receive incremental updates:
+ * Methods can optionally stream output via SSE. Pass `{ stream: true }` as
+ * the second argument along with callbacks for the events you care about:
  *
  * ```ts
+ * // LLM token text
  * const result = await api.submitVendorRequest({ name: 'Acme' }, {
  *   stream: true,
  *   onToken: (text) => setResponseText(text),
+ * });
+ *
+ * // Structured progress events from `stream({...})` on the backend
+ * const order = await api.processOrder({ id: 'abc' }, {
+ *   stream: true,
+ *   onStreamData: (event) => setStatus(event),
  * });
  * ```
  *
  * **Important:** The `text` value passed to `onToken` is the accumulated
  * response so far (not a delta). Replace your display content each time —
  * do not append. See {@link InvokeOptions.onToken} for details.
+ *
+ * Each `onStreamData` payload is independent (no accumulation) — it's the
+ * raw object passed to `stream({...})` on the backend.
  *
  * ## Type safety
  *
@@ -71,11 +80,12 @@ import { MindStudioInterfaceError } from './errors.js';
  *
  * When `stream` is `true`, the SDK sends `{ stream: true }` in the request
  * body and parses the response as an SSE (Server-Sent Events) stream.
- * Three event types are handled:
+ * Four event types are handled:
  *
  * | SSE `type` | Payload field | SDK action |
  * |------------|---------------|------------|
  * | `token`    | `text`        | Calls {@link onToken} with accumulated text |
+ * | `data`     | `data`        | Calls {@link onStreamData} with the raw payload |
  * | `error`    | `error`       | Calls {@link onStreamError} with the message |
  * | `done`     | `output`      | Captures as the method's return value |
  *
@@ -118,6 +128,31 @@ export interface InvokeOptions {
    * ```
    */
   onToken?: (text: string) => void;
+
+  /**
+   * Called when the backend method emits a structured event via
+   * `stream({...})` (object payload).
+   *
+   * Receives the raw object passed to `stream()` on the backend —
+   * not accumulated, not parsed, not wrapped. Use this for status
+   * updates, progress, intermediate results, or any structured
+   * streaming UI that isn't LLM token text.
+   *
+   * Different from {@link onToken}, which receives accumulated text from
+   * `stream('text')` calls.
+   *
+   * @example
+   * ```ts
+   * await api.processOrder({ id: 'abc' }, {
+   *   stream: true,
+   *   onStreamData: (event) => {
+   *     // event is whatever the backend passed to stream({...})
+   *     setStatus(event as { status: string; progress: number });
+   *   },
+   * });
+   * ```
+   */
+  onStreamData?: (payload: unknown) => void;
 
   /**
    * Called if a stream-level error event arrives.
@@ -258,10 +293,13 @@ export function createClient<T = DefaultMethodClient>(): T {
                 text?: string;
                 error?: string;
                 output?: unknown;
+                data?: unknown;
               };
 
               if (event.type === 'token' && options?.onToken && event.text) {
                 options.onToken(event.text);
+              } else if (event.type === 'data' && options?.onStreamData) {
+                options.onStreamData(event.data);
               } else if (event.type === 'error' && event.error) {
                 streamError = event.error;
                 if (options?.onStreamError) {
