@@ -12,7 +12,7 @@ src/
   client.ts         — createClient() → Proxy-based method RPC client
   agent-chat.ts     — createAgentChatClient() → thread CRUD + SSE message streaming
   platform.ts       — uploadFile() via presigned S3 POST
-  auth.ts           — auth flows (email/SMS codes, session state, logout)
+  auth.ts           — auth flows (email/SMS codes, Sign in with Remy, session state, logout)
   auth-phone.ts     — phone helpers (countries, formatting, E.164 conversion)
   auth-email.ts     — email validation
   config.ts         — reads window.__MINDSTUDIO__, validates, caches, updateConfig()
@@ -104,6 +104,13 @@ const user = await auth.verifyEmailCode(verificationId, '123456');
 const { verificationId } = await auth.sendSmsCode('+15551234567');
 const user = await auth.verifySmsCode(verificationId, '123456');
 
+// Sign in with Remy (platform-delegated) — identity is delegated to the
+// platform (like "Sign in with Google"); the platform decides who the user
+// is and whether they're allowed. Surfaces as the `remy` auth method.
+auth.signInWithRemy();                    // SP-initiated: redirects away
+auth.signInWithRemy({ redirectUri: '/dashboard' }); // custom return URL
+const user = await auth.handleRemyRedirect(); // call on load; null if no ?code
+
 // Email/phone change (requires authentication)
 await auth.requestEmailChange('new@example.com');
 await auth.confirmEmailChange('new@example.com', '123456');
@@ -128,11 +135,27 @@ auth.email.isValid('user@example.com') // true
 
 Verify/confirm/logout methods update `window.__MINDSTUDIO__` in-place with the returned `{ user, token, methods, visitorId }` bundle. All downstream calls (method invocation, agent chat, uploads) immediately use the new session.
 
-**User shape (`AppUser`):** `{ id, email, phone, roles, apiKey, createdAt }` — same everywhere (bootstrap, API responses, `getCurrentUser()`). `null` means unauthenticated.
+**User shape (`AppUser`):** `{ id, email, phone, roles, apiKey, provider, createdAt }` — same everywhere (bootstrap, API responses, `getCurrentUser()`). `null` means unauthenticated. `provider` is `'remy'` for users who signed in via "Sign in with Remy", `null`/absent for app-verified users (email/sms/api-key).
+
+**Sign in with Remy (`remy` method):** platform-delegated identity — the app hands identity off to the platform and trusts the answer (contrast the `email-code`/`sms-code`/`api-key` methods, where the app verifies a channel the user controls). Two entry points, both terminating at the same exchange:
+
+- **SP-initiated (the button):** `auth.signInWithRemy(options?)` stashes a CSRF `state` in `sessionStorage`, then navigates the browser to `/_/auth/remy/start?redirect_uri=<full same-origin URL>&state=<csrf>`. The platform resolves access and bounces back to `redirect_uri?code&state`.
+- **IdP-initiated (dashboard launch):** the Remy dashboard tile opens the app at `?code=` on first paint, with **no `state`** (the single-use, app-bound, 60s code is the control).
+
+`signInWithRemy()` returns `Promise<AppUser | null>` and **auto-detects the context** (`window.top !== window.self`):
+
+- **Top-level** (production / standalone tab): full-page redirect as above; the promise never settles (the page navigates away).
+- **Embedded** (cross-origin iframe, e.g. the dev IDE preview): runs the handshake in a **top-level popup**, because the authorize page (`app.goremy.ai/sign-in-with-remy`) hard-denies framing (`X-Frame-Options: DENY` + CSP `frame-ancestors 'none'`). The popup follows the 302 as a first-party document, then the SDK instance loaded in the popup `postMessage`s `{ code, state }` back to the opener and closes; the **opener** validates `state`/origin/source, runs `/_/auth/remy/exchange`, and owns the resulting session. The promise resolves with the user, `null` on user-cancel (popup closed), or rejects (`popup_blocked` / `invalid_state` / `signin_timeout` / exchange error). Override detection with `options.mode` (`'auto' | 'popup' | 'redirect'`).
+
+Popup-flow invariants: `window.open` fires synchronously on the click gesture (else it's blocked); the popup callback (`?ms_popup=1`) is relayed + short-circuited **at SDK import, before telemetry installs**, so the throwaway popup fires no phantom pageview/presence; the `ms_iface_` token from the exchange body is the source of truth (held in memory), so the session works even when the third-party `__ms_auth` cookie is dropped. The channel depends on `window.opener` surviving the authorize round-trip — which holds only because the authorize page sets **no `Cross-Origin-Opener-Policy`**; adding COOP there would sever it (storage partitioning rules out a `BroadcastChannel`/`localStorage` fallback). The embedding iframe must allow popups (`sandbox` needs `allow-popups allow-popups-to-escape-sandbox`).
+
+`auth.handleRemyRedirect()` handles both: call it once on load. It's a no-op (`null`) when there's no `?code`, so it's safe on every mount. On a `?code`: it validates a returned `state` against the stashed one (SP flow) or redeems directly when there's none (IdP flow), POSTs `/_/auth/remy/exchange`, applies the session in-place (fires `onAuthStateChanged`), strips `code`/`state` from the URL, and returns the user. Throws `invalid_state` on a state mismatch.
+
+The "Continue with {Org}" button label is authored at app-build time by Remy — it is **not** provided by the SDK at runtime.
 
 **Visitor ID:** `auth.currentVisitorId` returns a stable per-browser, per-app opaque string. Backed by a server-set HttpOnly cookie scoped to the exact subdomain; persists ~1 year (rolling). For authed sessions it's the user's platform user ID; for guests it's a per-browser UUID. Updates automatically on login/logout transitions alongside `currentUser`. Useful for app-side analytics, "welcome back" UX for guests, per-visitor preferences keyed in the app DB.
 
-**Endpoints:** `/_/auth/email/send`, `/_/auth/email/verify`, `/_/auth/sms/send`, `/_/auth/sms/verify`, `/_/auth/email/change`, `/_/auth/email/change/confirm`, `/_/auth/phone/change`, `/_/auth/phone/change/confirm`, `/_/auth/logout`, `/_/auth/me`, `/_/auth/api-key/create`, `/_/auth/api-key/revoke`.
+**Endpoints:** `/_/auth/email/send`, `/_/auth/email/verify`, `/_/auth/sms/send`, `/_/auth/sms/verify`, `/_/auth/email/change`, `/_/auth/email/change/confirm`, `/_/auth/phone/change`, `/_/auth/phone/change/confirm`, `/_/auth/logout`, `/_/auth/me`, `/_/auth/api-key/create`, `/_/auth/api-key/revoke`, `/_/auth/remy/start` (GET, 302 redirect), `/_/auth/remy/exchange` (POST, redeems the one-time code → session bundle).
 
 ### Agent chat (`createAgentChatClient`)
 

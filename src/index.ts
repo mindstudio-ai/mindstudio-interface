@@ -56,7 +56,7 @@ export {
   type Message,
 } from './agent-chat.js';
 export { platform, type UploadFileOptions } from './platform.js';
-export { auth, type Auth } from './auth.js';
+export { auth, type Auth, type SignInWithRemyOptions } from './auth.js';
 export {
   analytics,
   type AnalyticsClient,
@@ -82,16 +82,22 @@ export type { Breadcrumb } from './telemetry-breadcrumbs.js';
 // ---------------------------------------------------------------------------
 
 import { getConfig } from './config.js';
+import { maybeRelayRemyPopupCallback } from './auth.js';
 
-if (
-  typeof window !== 'undefined' &&
-  (globalThis as Record<string, unknown>).__MINDSTUDIO__
-) {
-  setTimeout(() => {
-    try {
-      getConfig();
-    } catch {
-      // bootstrap reads can still happen lazily on first SDK call
-    }
-  }, 0);
+if (typeof window !== 'undefined') {
+  // If this window is the throwaway "Sign in with Remy" popup callback, relay
+  // the code to the opener and close — synchronously, *before* installing
+  // telemetry, so the popup never fires a phantom pageview / presence
+  // connection. When it's not a popup callback this is a cheap no-op.
+  const relayed = maybeRelayRemyPopupCallback();
+
+  if (!relayed && (globalThis as Record<string, unknown>).__MINDSTUDIO__) {
+    setTimeout(() => {
+      try {
+        getConfig();
+      } catch {
+        // bootstrap reads can still happen lazily on first SDK call
+      }
+    }, 0);
+  }
 }

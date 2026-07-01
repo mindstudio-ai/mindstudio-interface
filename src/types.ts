@@ -32,6 +32,14 @@ export interface AppUser {
   /** Masked API key (e.g. "sk_...a1b2"), or null if no key exists. */
   apiKey: string | null;
 
+  /**
+   * How this user authenticated. `'remy'` means the identity was delegated
+   * to the platform via "Sign in with Remy" (roles + verification are
+   * platform-managed for these users). `null`/absent means an app-verified
+   * user (email-code, sms-code, or api-key).
+   */
+  provider?: 'remy' | null;
+
   /** ISO 8601 timestamp of when the user was created. */
   createdAt: string;
 }
