@@ -95,6 +95,7 @@ import { auth } from '@mindstudio-ai/interface';
 // State (sync — reads from cached bootstrap config)
 auth.getCurrentUser()    // AppUser | null
 auth.isAuthenticated()   // boolean
+auth.authStatus          // 'authenticating' | 'authenticated' | 'unauthenticated'
 
 // Email code flow
 const { verificationId } = await auth.sendEmailCode('user@example.com');
@@ -147,9 +148,21 @@ Verify/confirm/logout methods update `window.__MINDSTUDIO__` in-place with the r
 - **Top-level** (production / standalone tab): full-page redirect as above; the promise never settles (the page navigates away).
 - **Embedded** (cross-origin iframe, e.g. the dev IDE preview): runs the handshake in a **top-level popup**, because the authorize page (`app.goremy.ai/sign-in-with-remy`) hard-denies framing (`X-Frame-Options: DENY` + CSP `frame-ancestors 'none'`). The popup follows the 302 as a first-party document, then the SDK instance loaded in the popup `postMessage`s `{ code, state }` back to the opener and closes; the **opener** validates `state`/origin/source, runs `/_/auth/remy/exchange`, and owns the resulting session. The promise resolves with the user, `null` on user-cancel (popup closed), or rejects (`popup_blocked` / `invalid_state` / `signin_timeout` / exchange error). Override detection with `options.mode` (`'auto' | 'popup' | 'redirect'`).
 
-Popup-flow invariants: `window.open` fires synchronously on the click gesture (else it's blocked); the popup callback (`?ms_popup=1`) is relayed + short-circuited **at SDK import, before telemetry installs**, so the throwaway popup fires no phantom pageview/presence; the `ms_iface_` token from the exchange body is the source of truth (held in memory), so the session works even when the third-party `__ms_auth` cookie is dropped. The channel depends on `window.opener` surviving the authorize round-trip — which holds only because the authorize page sets **no `Cross-Origin-Opener-Policy`**; adding COOP there would sever it (storage partitioning rules out a `BroadcastChannel`/`localStorage` fallback). The embedding iframe must allow popups (`sandbox` needs `allow-popups allow-popups-to-escape-sandbox`).
+Popup-flow invariants: `window.open` fires synchronously on the click gesture (else it's blocked); the popup callback (`?ms_popup=1`) is relayed + short-circuited **at SDK import, before telemetry installs**, so the throwaway popup fires no phantom pageview/presence; the relay is **idempotent** — the popup forwards its code to the opener exactly once, so `handleRemyRedirect()` stays a safe no-op in the popup even though it boots the same bundle, and the opener's message listener commits to the first valid message synchronously (so a duplicate/replayed post can't double-redeem the one-time code); the `ms_iface_` token from the exchange body is the source of truth (held in memory), so the session works even when the third-party `__ms_auth` cookie is dropped. The channel depends on `window.opener` surviving the authorize round-trip — which holds only because the authorize page sets **no `Cross-Origin-Opener-Policy`**; adding COOP there would sever it (storage partitioning rules out a `BroadcastChannel`/`localStorage` fallback). The embedding iframe must allow popups (`sandbox` needs `allow-popups allow-popups-to-escape-sandbox`).
 
 `auth.handleRemyRedirect()` handles both: call it once on load. It's a no-op (`null`) when there's no `?code`, so it's safe on every mount. On a `?code`: it validates a returned `state` against the stashed one (SP flow) or redeems directly when there's none (IdP flow), POSTs `/_/auth/remy/exchange`, applies the session in-place (fires `onAuthStateChanged`), strips `code`/`state` from the URL, and returns the user. Throws `invalid_state` on a state mismatch.
+
+**Redirect lifecycle — read `auth.authStatus`, not the URL.** `handleRemyRedirect()` strips `?code` at the *start* of the exchange, so the URL param can't gate a "Completing sign-in…" state (it's gone while the exchange is still running). Instead, `auth.authStatus` is `'authenticating'` from **page load** (set synchronously at SDK import when a cold-load `?code` is present) through settle — covering the top-level redirect return, the IdP launch, and the embedded popup exchange. The immediate `null` from `onAuthStateChanged` during this window is expected; `onAuthStateChanged` fires on every `authStatus` transition (including exchange failure), so re-read `auth.authStatus` in the callback and render the spinner while it's `'authenticating'`. Apps should **not** hand-roll `sessionStorage`/URL detection for this.
+
+```ts
+const [user, setUser] = useState(auth.currentUser);
+const [status, setStatus] = useState(auth.authStatus);
+useEffect(() => auth.onAuthStateChanged(() => {
+  setUser(auth.currentUser);
+  setStatus(auth.authStatus);           // 'authenticating' → "Completing sign-in…"
+}), []);
+useEffect(() => { auth.handleRemyRedirect().catch(() => {}); }, []);
+```
 
 The "Continue with {Org}" button label is authored at app-build time by Remy — it is **not** provided by the SDK at runtime.
 

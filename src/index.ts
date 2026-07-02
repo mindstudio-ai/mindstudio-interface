@@ -56,7 +56,12 @@ export {
   type Message,
 } from './agent-chat.js';
 export { platform, type UploadFileOptions } from './platform.js';
-export { auth, type Auth, type SignInWithRemyOptions } from './auth.js';
+export {
+  auth,
+  type Auth,
+  type AuthStatus,
+  type SignInWithRemyOptions,
+} from './auth.js';
 export {
   analytics,
   type AnalyticsClient,

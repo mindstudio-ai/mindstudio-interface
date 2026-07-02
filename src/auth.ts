@@ -109,6 +109,39 @@ const REMY_STATE_KEY = '__ms_remy_state';
 const REMY_POPUP_MARKER = 'ms_popup';
 const REMY_POPUP_MESSAGE = 'ms:remy:callback';
 
+// The popup document forwards its one-time code to the opener exactly once,
+// whichever entry point (the import-time fast path or handleRemyRedirect())
+// runs the relay. Flipped after the first successful post — see
+// maybeRelayRemyPopupCallback.
+let remyPopupForwarded = false;
+
+/**
+ * Whether a delegated ("Sign in with Remy") handshake is completing right now.
+ *
+ * Set **synchronously at module load** when the page is a cold-load redirect
+ * return (a `?code` in the URL that isn't a popup callback) — before any app
+ * render — and cleared when the exchange settles. This is the stable signal
+ * apps read via {@link Auth.authStatus}; the `?code` URL param can't serve that
+ * role because handleRemyRedirect() strips it at the *start* of the exchange.
+ * Also toggled around the embedded popup exchange (see signInWithRemyPopup).
+ */
+let redirectPending = detectColdLoadRedirect();
+
+/** True when this page load is a cold-load delegated redirect return. */
+function detectColdLoadRedirect(): boolean {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+  try {
+    const params = new URL(window.location.href).searchParams;
+    // A popup-callback document (`?ms_popup=1`) relays + closes; it never
+    // redeems here, so it isn't "authenticating" from the app's perspective.
+    return params.has('code') && params.get(REMY_POPUP_MARKER) !== '1';
+  } catch {
+    return false;
+  }
+}
+
 /** Generate an opaque, unguessable CSRF state value. */
 function generateState(): string {
   const c = globalThis.crypto;
@@ -161,6 +194,39 @@ function updateUserAndNotify(update: Partial<AppUser>): void {
   }
 }
 
+/** The current user, or `null` — never throws if the bootstrap is absent. */
+function safeCurrentUser(): AppUser | null {
+  try {
+    return getConfig().user;
+  } catch {
+    return null;
+  }
+}
+
+/** Fire every auth listener with the current user (for auth-state changes). */
+function notifyAuthListeners(): void {
+  const user = safeCurrentUser();
+  authListeners.forEach((cb) => cb(user));
+}
+
+/** Enter the 'authenticating' state and notify subscribers (idempotent). */
+function beginAuthenticating(): void {
+  if (redirectPending) {
+    return;
+  }
+  redirectPending = true;
+  notifyAuthListeners();
+}
+
+/** Leave the 'authenticating' state and notify subscribers (idempotent). */
+function endAuthenticating(): void {
+  if (!redirectPending) {
+    return;
+  }
+  redirectPending = false;
+  notifyAuthListeners();
+}
+
 /** True when the SDK is running inside a (cross-origin) iframe. */
 function isEmbedded(): boolean {
   try {
@@ -169,6 +235,31 @@ function isEmbedded(): boolean {
     // Cross-origin restrictions on reading window.top → we're definitely framed.
     return true;
   }
+}
+
+// Sign-in popup size — compact and roughly square. (The old 480×720 opened tall
+// and, with no left/top, pinned to the top-left corner.)
+const REMY_POPUP_WIDTH = 520;
+const REMY_POPUP_HEIGHT = 600;
+
+/**
+ * A `window.open` features string for a popup of the given size, centered over
+ * the current browser window (dual-monitor-safe — centers on the window the
+ * user is actually looking at, not the primary screen), clamped to fit.
+ */
+function centeredPopupFeatures(width: number, height: number): string {
+  const baseLeft = window.screenX;
+  const baseTop = window.screenY;
+  const viewW = window.outerWidth || window.innerWidth || window.screen.width;
+  const viewH =
+    window.outerHeight || window.innerHeight || window.screen.height;
+
+  const w = Math.min(width, viewW);
+  const h = Math.min(height, viewH);
+  const left = Math.max(0, Math.round(baseLeft + (viewW - w) / 2));
+  const top = Math.max(0, Math.round(baseTop + (viewH - h) / 2));
+
+  return `popup=yes,width=${Math.round(w)},height=${Math.round(h)},left=${left},top=${top}`;
 }
 
 /**
@@ -197,7 +288,11 @@ function signInWithRemyPopup(
 
   // MUST open synchronously on the user's click — awaiting first spends the
   // gesture and the browser blocks the popup.
-  const popup = window.open(startUrl, 'ms-remy-signin', 'width=480,height=720');
+  const popup = window.open(
+    startUrl,
+    'ms-remy-signin',
+    centeredPopupFeatures(REMY_POPUP_WIDTH, REMY_POPUP_HEIGHT),
+  );
   if (!popup) {
     return Promise.reject(
       new MindStudioInterfaceError(
@@ -207,10 +302,17 @@ function signInWithRemyPopup(
     );
   }
 
+  // The opener is now completing a handshake — reflected by auth.authStatus
+  // until the exchange settles (or the popup is cancelled/times out).
+  beginAuthenticating();
+
   return new Promise<AppUser | null>((resolve, reject) => {
     const appOrigin = window.location.origin;
     let settled = false;
-    let receivedCode = false;
+    // Set synchronously when the first valid message is accepted — guards
+    // against a duplicate/replayed post starting a second exchange, and stops
+    // a later popup.closed from reading as "cancel" mid-exchange.
+    let accepted = false;
 
     const finish = (fn: () => void): void => {
       if (settled) {
@@ -220,6 +322,10 @@ function signInWithRemyPopup(
       window.removeEventListener('message', onMessage);
       clearInterval(pollTimer);
       clearTimeout(timeoutId);
+      // Clear the 'authenticating' state (no-op on success — the exchange
+      // already cleared it before applySession; clears + notifies on
+      // cancel/timeout/error so the app leaves the "Completing sign-in…" UI).
+      endAuthenticating();
       try {
         if (!popup.closed) {
           popup.close();
@@ -231,6 +337,11 @@ function signInWithRemyPopup(
     };
 
     const onMessage = (event: MessageEvent): void => {
+      // Once we've committed to the first valid message, ignore everything
+      // else — a duplicate/replayed post must never start a second redemption.
+      if (settled || accepted) {
+        return;
+      }
       // Hygiene: our exact origin, the window we opened, our shape, our state.
       if (event.origin !== appOrigin || event.source !== popup) {
         return;
@@ -244,8 +355,9 @@ function signInWithRemyPopup(
         return; // not ours / stale / cross-talk / possible CSRF
       }
 
-      // We have the code — a subsequent popup.closed must not read as "cancel".
-      receivedCode = true;
+      // Commit synchronously, before the exchange await: this is the single
+      // redemption, and a later popup.closed must not read as "cancel".
+      accepted = true;
 
       if (!data.code) {
         finish(() =>
@@ -264,6 +376,9 @@ function signInWithRemyPopup(
         code: data.code,
       })
         .then((bundle) => {
+          // Clear the flag before applySession's notify so subscribers see
+          // 'authenticated' directly — never a stray 'unauthenticated' frame.
+          redirectPending = false;
           applySession(bundle);
           finish(() => resolve(requireUser(bundle)));
         })
@@ -272,10 +387,10 @@ function signInWithRemyPopup(
 
     window.addEventListener('message', onMessage);
 
-    // User closed the popup before finishing → cancelled (unless we already
-    // received the code and are mid-exchange).
+    // User closed the popup before finishing → cancelled (unless we've already
+    // accepted the callback message and are mid-exchange).
     const pollTimer = setInterval(() => {
-      if (popup.closed && !receivedCode) {
+      if (popup.closed && !accepted) {
         finish(() => resolve(null));
       }
     }, 400);
@@ -324,6 +439,15 @@ export function maybeRelayRemyPopupCallback(): boolean {
     return false;
   }
 
+  // Idempotent: forward the code once per popup document. Both the import-time
+  // fast path and handleRemyRedirect() call this on load; without the guard an
+  // app following the documented "call handleRemyRedirect() on load" runs a
+  // second forward inside the popup and the opener redeems the one-time code
+  // twice (the second 400s). Return `true` — it's still the "handled" path.
+  if (remyPopupForwarded) {
+    return true;
+  }
+
   const opener = window.opener as Window | null;
   if (!opener || opener === window) {
     // No channel back to the app — e.g. COOP severed the opener. Redeeming
@@ -345,6 +469,8 @@ export function maybeRelayRemyPopupCallback(): boolean {
     return false;
   }
 
+  remyPopupForwarded = true;
+
   // The opener closes us after the exchange; self-close on the next tick is a
   // backstop in case it isn't listening.
   try {
@@ -354,6 +480,18 @@ export function maybeRelayRemyPopupCallback(): boolean {
   }
   return true;
 }
+
+/**
+ * The high-level authentication state, from {@link Auth.authStatus}.
+ *
+ * - `'authenticating'` — a "Sign in with Remy" handshake is completing right
+ *   now: a cold-load redirect return (top-level or dashboard launch) is being
+ *   redeemed, or an embedded popup exchange is in flight. Render a
+ *   "Completing sign-in…" state, not the logged-out UI.
+ * - `'authenticated'` — a user is signed in ({@link Auth.currentUser} is set).
+ * - `'unauthenticated'` — no session and nothing in progress.
+ */
+export type AuthStatus = 'authenticating' | 'authenticated' | 'unauthenticated';
 
 /**
  * Options for {@link Auth.signInWithRemy}.
@@ -420,6 +558,22 @@ export interface Auth {
 
   /** Whether the current session is authenticated. */
   isAuthenticated(): boolean;
+
+  /**
+   * The high-level auth state — `'authenticating'`, `'authenticated'`, or
+   * `'unauthenticated'`. Synchronous and safe to read in render.
+   *
+   * The key case is `'authenticating'`: it's `true` from **page load** through
+   * settle whenever a "Sign in with Remy" handshake is completing (a cold-load
+   * redirect return being redeemed, or an embedded popup exchange in flight).
+   * Read this to show a "Completing sign-in…" state instead of the logged-out
+   * UI — the `?code` URL param can't be used for that (it's stripped at the
+   * start of the exchange), and the immediate `null` from
+   * {@link onAuthStateChanged} during this window is expected.
+   *
+   * `onAuthStateChanged` fires on every transition, so re-read this there.
+   */
+  readonly authStatus: AuthStatus;
 
   /**
    * The stable per-browser, per-app visitor identifier, or `null` if
@@ -502,6 +656,12 @@ export interface Auth {
    *   first paint with no `state`; the single-use, app-bound code is the
    *   control, so it's redeemed directly.
    *
+   * Inside the embedded/popup document it's also a safe no-op: the popup boots
+   * the same bundle, but the code is relayed to the opener exactly once
+   * (idempotent — the import-time fast path already forwarded it), and this
+   * call resolves `null` without redeeming. So the documented "call on load"
+   * guidance holds everywhere — no need to special-case the popup.
+   *
    * On success, updates the session in-place (fires `onAuthStateChanged`),
    * strips `code`/`state` from the URL, and returns the authenticated user.
    *
@@ -556,19 +716,27 @@ export interface Auth {
   revokeApiKey(): Promise<void>;
 
   /**
-   * Subscribe to auth state changes. Fires immediately with the
-   * current state, then again whenever verify, confirm, or logout
-   * updates the session.
+   * Subscribe to auth state changes. Fires immediately with the current user,
+   * then again on every transition — verify / confirm / logout, **and** each
+   * `authStatus` change (a "Sign in with Remy" handshake starting or settling).
+   *
+   * During `'authenticating'` the callback may fire with `null` (no session
+   * yet) — that's expected; read {@link authStatus} to tell it apart from a
+   * logged-out visit rather than rendering the login UI.
    *
    * @returns An unsubscribe function.
    *
    * @example
    * ```ts
-   * // React hook
+   * // React hook — track both the user and the status.
    * function useAuth() {
-   *   const [user, setUser] = useState<AppUser | null>(null);
-   *   useEffect(() => auth.onAuthStateChanged(setUser), []);
-   *   return user;
+   *   const [user, setUser] = useState(auth.currentUser);
+   *   const [status, setStatus] = useState(auth.authStatus);
+   *   useEffect(() => auth.onAuthStateChanged(() => {
+   *     setUser(auth.currentUser);
+   *     setStatus(auth.authStatus);
+   *   }), []);
+   *   return { user, status };
    * }
    * ```
    */
@@ -614,6 +782,13 @@ export const auth: Auth = {
 
   isAuthenticated() {
     return getConfig().user !== null;
+  },
+
+  get authStatus() {
+    if (redirectPending) {
+      return 'authenticating';
+    }
+    return safeCurrentUser() ? 'authenticated' : 'unauthenticated';
   },
 
   get currentVisitorId() {
@@ -723,23 +898,38 @@ export const auth: Auth = {
       // sessionStorage unavailable — CSRF check degrades to redeem-only.
     }
 
+    // We're redeeming now — reflect it in auth.authStatus. Idempotent: module
+    // load already set this for a cold-load return; this also covers callers
+    // that reach here without the eager path having run.
+    beginAuthenticating();
+
     // SP-initiated returns round-trip a `state` that must match what we
     // stashed. IdP-initiated launches carry no `state` — the single-use,
     // app-bound, short-lived code is the control there.
     if (returnedState !== null && returnedState !== storedState) {
+      endAuthenticating();
       throw new MindStudioInterfaceError(
         'Sign-in state mismatch — possible CSRF or a stale redirect. Please try again.',
         'invalid_state',
       );
     }
 
-    const bundle = await authFetch<AuthSessionBundle>(
-      '/_/auth/remy/exchange',
-      'POST',
-      { code },
-    );
-    applySession(bundle);
-    return requireUser(bundle);
+    try {
+      const bundle = await authFetch<AuthSessionBundle>(
+        '/_/auth/remy/exchange',
+        'POST',
+        { code },
+      );
+      // Clear the flag before applySession's notify so subscribers transition
+      // straight to 'authenticated' — no intermediate 'unauthenticated' frame.
+      redirectPending = false;
+      applySession(bundle);
+      return requireUser(bundle);
+    } catch (err) {
+      // Clear + notify so the app leaves the "Completing sign-in…" state.
+      endAuthenticating();
+      throw err;
+    }
   },
 
   // -- Email/phone change --
@@ -800,7 +990,7 @@ export const auth: Auth = {
 
   onAuthStateChanged(callback: (user: AppUser | null) => void) {
     authListeners.add(callback);
-    callback(getConfig().user);
+    callback(safeCurrentUser());
     return () => {
       authListeners.delete(callback);
     };
