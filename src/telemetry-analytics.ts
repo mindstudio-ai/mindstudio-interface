@@ -320,6 +320,10 @@ function track(event: string, props?: CustomEventProps): void {
 const PRESENCE_ENDPOINT = '/_/telemetry/presence';
 const PRESENCE_MAX_BACKOFF_MS = 10_000;
 const PRESENCE_503_DEFAULT_MS = 30_000;
+// A stream must stay open at least this long to count as a *stable* connect
+// and earn a backoff reset. Shorter-lived streams are treated as flaps so
+// the backoff keeps escalating instead of hammering a ~1s reconnect loop.
+const PRESENCE_STABLE_MS = 30_000;
 
 let presenceAbort: AbortController | null = null;
 let presenceReconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -406,13 +410,28 @@ async function openPresenceConnection(): Promise<void> {
       return;
     }
 
+    if (res.status === 204) {
+      // Presence is stubbed/disabled for this session — e.g. the dev tunnel
+      // mock, or a backend with presence turned off. Per EventSource
+      // semantics (which the dev mock explicitly relies on) a 204 means
+      // "abandon the connection and do NOT reconnect." Stop cleanly instead
+      // of hammering a reconnect loop against an endpoint that will keep
+      // returning 204. A 204 has res.ok === true but a null body, so this
+      // must be handled before the generic !res.body branch below.
+      presenceActive = false;
+      return;
+    }
+
     if (!res.ok || !res.body) {
       schedulePresenceReconnect(presenceNextBackoff());
       return;
     }
 
-    // Successful connect — reset backoff
-    presenceBackoffMs = 1000;
+    // Note the connect time — but don't reset the backoff yet. Resetting on
+    // the bare 200 lets a stream that closes immediately reconnect every ~1s
+    // forever (the backoff never engages). We only reset once the stream has
+    // stayed open long enough to count as stable (see below).
+    const connectedAt = Date.now();
 
     const reader = res.body.getReader();
 
@@ -425,8 +444,15 @@ async function openPresenceConnection(): Promise<void> {
       }
     }
 
-    // Stream ended (server closed, deploy, etc.) — reconnect
+    // Stream ended (server closed, deploy, etc.) — reconnect. If it stayed
+    // open long enough to be healthy, reset the backoff so the reconnect is
+    // prompt; otherwise let the backoff keep escalating (up to
+    // PRESENCE_MAX_BACKOFF_MS) so a flapping stream can't become a per-second
+    // reconnect storm.
     if (presenceActive) {
+      if (Date.now() - connectedAt >= PRESENCE_STABLE_MS) {
+        presenceBackoffMs = 1000;
+      }
       schedulePresenceReconnect(presenceNextBackoff());
     }
   } catch (err) {
