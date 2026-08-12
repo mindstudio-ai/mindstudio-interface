@@ -36,6 +36,20 @@ export interface UploadFileOptions {
 }
 
 /**
+ * An upload token minted by an app's backend (`Store.createUploadToken` in
+ * `@mindstudio-ai/agent`) and passed to {@link platform.upload}. Opaque — carry
+ * it from the backend response straight into `platform.upload(token, file)`.
+ */
+export interface UploadToken {
+  /** The object key the upload lands at. */
+  key: string;
+  /** The URL the file will be readable at once uploaded. */
+  url: string;
+  /** The scoped presigned POST the browser submits to. */
+  upload: { url: string; fields: Record<string, string> };
+}
+
+/**
  * The platform namespace — file upload actions.
  */
 export const platform = {
@@ -131,6 +145,55 @@ export const platform = {
     }
 
     return publicUrl;
+  },
+
+  /**
+   * Upload a file with an {@link UploadToken} minted by the app's backend
+   * (`Store.createUploadToken`). The file is POSTed **directly to storage** —
+   * the bytes never pass through the platform — and the returned `{ key, url }`
+   * is ready to render (`url` is a stable on-domain link the app can use in
+   * `<img>` / `fetch` / `<a download>`).
+   *
+   * @example
+   * ```ts
+   * const token = await api.getUploadSlot({ contentType: file.type });
+   * const { url } = await platform.upload(token, file, {
+   *   onProgress: (f) => setProgress(f),
+   * });
+   * ```
+   */
+  async upload(
+    token: UploadToken,
+    file: File,
+    options?: UploadFileOptions,
+  ): Promise<{ key: string; url: string }> {
+    const { onProgress, signal } = options ?? {};
+    signal?.throwIfAborted();
+
+    const formData = new FormData();
+    for (const [key, value] of Object.entries(token.upload.fields)) {
+      formData.append(key, value);
+    }
+    formData.append('file', file); // must be last
+
+    if (onProgress) {
+      await xhrUpload(token.upload.url, formData, onProgress, signal);
+    } else {
+      const res = await fetch(token.upload.url, {
+        method: 'POST',
+        body: formData,
+        signal,
+      });
+      if (!res.ok) {
+        throw new MindStudioInterfaceError(
+          `File upload failed: ${res.status} ${res.statusText}`,
+          'upload_error',
+          res.status,
+        );
+      }
+    }
+
+    return { key: token.key, url: token.url };
   },
 };
 

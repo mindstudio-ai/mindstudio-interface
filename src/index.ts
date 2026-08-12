@@ -55,7 +55,11 @@ export {
   type ThreadListPage,
   type Message,
 } from './agent-chat.js';
-export { platform, type UploadFileOptions } from './platform.js';
+export {
+  platform,
+  type UploadFileOptions,
+  type UploadToken,
+} from './platform.js';
 export {
   auth,
   type Auth,
