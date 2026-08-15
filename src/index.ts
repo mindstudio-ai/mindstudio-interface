@@ -33,8 +33,9 @@
  * // Call backend methods (uses authenticated session)
  * const dashboard = await api.getDashboard();
  *
- * // Upload a file
- * const url = await platform.uploadFile(file);
+ * // Upload a file (client-direct to the app's file store)
+ * const token = await api.getUploadSlot({ contentType: file.type });
+ * const { url } = await platform.upload(token, file);
  *
  * // Current user
  * const user = auth.getCurrentUser();

@@ -280,15 +280,16 @@ export interface SendMessageOptions {
   /**
    * MindStudio CDN URLs to attach to the message.
    *
-   * Images (`i.mscdn.ai`) are sent to the model as vision input (one per message).
-   * Documents (`f.mscdn.ai`, `files.mindstudio-cdn.com`) have their text
-   * extracted server-side and included in context.
+   * Images are sent to the model as vision input (one per message).
+   * Documents have their text extracted server-side and included in context.
    *
-   * Upload files first via `platform.uploadFile()`.
+   * Upload files first via {@link platform.upload} (with a backend-minted
+   * upload token) and pass the returned URLs.
    *
    * @example
    * ```ts
-   * const url = await platform.uploadFile(file);
+   * const token = await api.getUploadSlot({ contentType: file.type });
+   * const { url } = await platform.upload(token, file);
    * chat.sendMessage(threadId, 'What is this?', callbacks, {
    *   attachments: [url],
    * });
@@ -339,10 +340,10 @@ export interface AgentChatClient {
    * `{ stopReason, usage }` when the stream completes. Call `.abort()`
    * on the returned promise to cancel mid-stream.
    *
-   * @param options.attachments - MindStudio CDN URLs to attach.
-   *   Images (`i.mscdn.ai`) are sent as vision input.
-   *   Documents (`f.mscdn.ai`) have text extracted into context.
-   *   Upload files first via `platform.uploadFile()`.
+   * @param options.attachments - URLs to attach.
+   *   Images are sent as vision input.
+   *   Documents have text extracted into context.
+   *   Upload files first via {@link platform.upload} and pass the returned URLs.
    */
   sendMessage(
     threadId: string,

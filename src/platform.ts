@@ -1,22 +1,20 @@
 /**
- * Platform actions — file uploads via presigned S3 POST.
+ * Platform actions — client-direct file uploads.
  *
- * Uses the session token from `window.__MINDSTUDIO__` to request a
- * presigned upload URL from the platform, then uploads directly to S3.
- * Returns the public CDN URL.
+ * The app's backend mints an upload token (`Store.createUploadToken` in
+ * `@mindstudio-ai/agent`); the browser then uploads the bytes straight to
+ * storage with {@link platform.upload}. The file lands in the app's own file
+ * store (private by default, served on the app's domain).
  *
  * @example
  * ```ts
- * import { platform } from '@mindstudio-ai/interface';
+ * import { createClient, platform } from '@mindstudio-ai/interface';
  *
+ * const api = createClient();
  * const file = document.querySelector('input[type=file]').files[0];
- * const url = await platform.uploadFile(file);
- *
- * // With progress and abort
- * const controller = new AbortController();
- * const url = await platform.uploadFile(file, {
+ * const token = await api.getUploadSlot({ contentType: file.type });
+ * const { key, url } = await platform.upload(token, file, {
  *   onProgress: (fraction) => console.log(`${Math.round(fraction * 100)}%`),
- *   signal: controller.signal,
  * });
  * ```
  */
@@ -59,6 +57,11 @@ export const platform = {
    * Requests a presigned upload URL from the platform, then uploads
    * the file directly to S3. Returns the public CDN URL.
    *
+   * @deprecated Use {@link platform.upload} with a backend-minted upload token
+   * (`Store.createUploadToken`) instead. That uploads into the app's own file
+   * store (private by default, on the app's domain); this legacy path uploads
+   * to the shared, world-readable account media CDN.
+   *
    * @param file - The File to upload
    * @param options - Optional progress callback and abort signal
    * @returns CDN URL of the uploaded file
@@ -66,18 +69,6 @@ export const platform = {
    * @example
    * ```ts
    * const url = await platform.uploadFile(file);
-   *
-   * // With progress
-   * const url = await platform.uploadFile(file, {
-   *   onProgress: (f) => setProgress(f),
-   * });
-   *
-   * // With abort
-   * const controller = new AbortController();
-   * const url = await platform.uploadFile(file, {
-   *   signal: controller.signal,
-   * });
-   * // controller.abort() to cancel
    * ```
    */
   async uploadFile(file: File, options?: UploadFileOptions): Promise<string> {
