@@ -2,7 +2,7 @@
 
 Frontend SDK for [MindStudio](https://mindstudio.ai) v2 app web interfaces.
 
-Typed RPC to backend methods, file uploads, authentication, and agent chat — all from the browser. Zero dependencies.
+Typed RPC to backend methods, file uploads, authentication, agent chat, and realtime voice — all from the browser. The core entry has zero dependencies; voice lives on the `./voice` subpath and loads its media transport (`livekit-client`) only when a session starts.
 
 ## Install
 
@@ -216,6 +216,11 @@ await chat.deleteThread(thread.id);
 const page2 = await chat.listThreads(nextCursor);
 ```
 
+If the app's agent interface declares an `auth` block, `createThread` and `sendMessage` reject
+with `MindStudioInterfaceError` code `auth_required` (401, no authenticated user) or
+`role_required` (403, user lacks a required role) — route those to the app's login flow.
+`createThread` also throws `no_agent_config` (404) when the app has no live agent interface.
+
 #### Sending messages
 
 `sendMessage` streams the agent's response via SSE. Named callbacks handle common events; the catch-all `onEvent` receives everything as a discriminated union.
@@ -310,6 +315,47 @@ All events are available via the `onEvent` catch-all as the `AgentChatEvent` dis
 | `tool_use` | `id`, `name`, `input` | `onEvent` only |
 | `tool_input_delta` | `id`, `name`, `delta` | `onEvent` only |
 | `done` | `stopReason`, `usage` | resolves the Promise |
+
+### createVoiceClient()
+
+Realtime voice sessions for apps with a voice interface. Imported from the `./voice` subpath — the
+media transport (`livekit-client`) loads dynamically on the first `startSession()`, so apps that
+never use voice ship none of it.
+
+```ts
+import { createVoiceClient } from '@mindstudio-ai/interface/voice';
+
+const voice = createVoiceClient();
+const session = await voice.startSession();
+
+session.on('stateChange', (state) => setOrbState(state));
+// 'connecting' | 'listening' | 'thinking' | 'speaking' | 'ended'
+
+session.on('transcript', ({ role, segmentId, text, final }) =>
+  upsertCaption(segmentId, role, text, final),
+); // full text per segment (never deltas); same segmentId replaces
+
+session.on('toolCall', ({ method, status }) => showToolStatus(method, status));
+// status: 'running' | 'done' | 'failed'
+
+session.mute();
+session.unmute();
+await session.sendText('123 Main Street'); // exact strings beat spelling aloud
+await session.end();
+```
+
+Agent audio playback is handled by the SDK (a hidden autoplaying element) — the app never touches
+audio elements. `startSession()` throws `MindStudioInterfaceError` with code `microphone_denied`
+when mic access is refused, `voice_concurrency_limit` / `voice_visitor_limit` when the app's
+session limits are hit, or `auth_required` (401) / `role_required` (403) when the voice
+interface's `auth` block denies the caller — route those to the app's login flow.
+
+Past sessions are call records:
+
+```ts
+const { sessions, nextCursor } = await voice.listSessions();
+const detail = await voice.getSession(sessions[0].id); // includes transcript
+```
 
 ## Error handling
 
