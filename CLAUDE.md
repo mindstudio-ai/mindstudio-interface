@@ -207,6 +207,8 @@ Stateless client — thread CRUD and message streaming over SSE. The app manages
 
 **Abort:** `sendMessage` returns an `AbortablePromise` — a Promise with `.abort()`. Also accepts `signal` in callbacks for `AbortController` integration.
 
+**Auth gating:** when the app's agent interface declares an `auth` block, `createThread`/`sendMessage` reject with `MindStudioInterfaceError` code `auth_required` (401) or `role_required` (403); `createThread` throws `no_agent_config` (404) when no live agent interface exists. Voice's `startSession()` throws the same two auth codes. All flow through the generic `{error, code}` handling — no special-casing in the SDK.
+
 ### Error reporting (telemetry)
 
 Auto-captures uncaught errors + unhandled promise rejections and ships them to `/_/telemetry/errors` for backend bucketing/dashboards. **No public API** — install runs automatically on the next tick after SDK import when the platform bootstrap is present, so error capture is live at page load.
@@ -262,7 +264,10 @@ window.__MINDSTUDIO__.telemetry = { analytics: false };
 
 ## Architecture notes
 
-- **Zero runtime dependencies.** Uses built-in `fetch` only.
+- **Zero runtime dependencies on the core entry.** Uses built-in `fetch` only. The one exception
+  is the `./voice` subpath (`src/voice.ts`), which declares `livekit-client` and loads it via
+  dynamic `import()` on first use — apps that never start a voice session never fetch it, and the
+  `.` entry has no reference to it.
 - **ESM only.** `"type": "module"` in package.json.
 - **Browser-only.** No Node.js APIs.
 - **Eager-when-bootstrapped, lazy-otherwise initialization.** When `window.__MINDSTUDIO__` is present at SDK import time, `getConfig()` runs on the next tick automatically so telemetry surfaces (errors, analytics, presence) install at page load — apps don't need to "touch" the SDK at boot to get this. In environments without the bootstrap (SSR/Node, tests, dev without platform context), the eager call is skipped and the SDK stays silent until something invokes a method, at which point `getConfig()` runs lazily as before.

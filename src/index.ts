@@ -2,15 +2,20 @@
  * @mindstudio-ai/interface — Frontend SDK for MindStudio v2 app interfaces.
  *
  * Provides typed RPC to backend methods, file uploads, authentication,
- * and agent chat conversations. Runs inside web interfaces with
+ * agent chat conversations, and analytics. Runs inside web interfaces with
  * credentials injected by the platform via `window.__MINDSTUDIO__`.
  *
- * ## Four exports
+ * ## Exports
  *
  * - `createClient()` — typed method RPC client
  * - `createAgentChatClient()` — thread-based agent conversations
  * - `platform` — file upload actions
  * - `auth` — authentication flows, user state, and validation helpers
+ * - `analytics` — custom event tracking
+ *
+ * Voice sessions live on the `./voice` subpath (`createVoiceClient()` from
+ * `@mindstudio-ai/interface/voice`) — deliberately not re-exported here, so
+ * the core entry stays free of the realtime media dependency.
  *
  * @example
  * ```ts
