@@ -335,8 +335,13 @@ session.on('transcript', ({ role, segmentId, text, final }) =>
   upsertCaption(segmentId, role, text, final),
 ); // full text per segment (never deltas); same segmentId replaces
 
-session.on('toolCall', ({ method, status }) => showToolStatus(method, status));
-// status: 'running' | 'done' | 'failed'
+session.on('toolCall', ({ method, status, result }) => {
+  showToolStatus(method, status);
+  // Tools declared with `forwardResult: true` in voice.md deliver their raw
+  // return value here on 'done' — render what the agent just did in lockstep
+  // with speech. Over ~32KB serialized arrives as `resultTruncated: true`.
+  if (status === 'done' && result !== undefined) renderToolResult(method, result);
+});
 
 session.mute();
 session.unmute();
