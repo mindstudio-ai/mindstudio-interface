@@ -211,6 +211,7 @@ const { threads, nextCursor } = await chat.listThreads();
 const full = await chat.getThread(thread.id);
 await chat.updateThread(thread.id, 'New title');
 await chat.deleteThread(thread.id);
+await chat.claimThread(thread.id); // after in-app login: keep anonymous threads
 
 // Paginate
 const page2 = await chat.listThreads(nextCursor);
@@ -337,15 +338,25 @@ session.on('transcript', ({ role, segmentId, text, final }) =>
 
 session.on('toolCall', ({ method, status, result }) => {
   showToolStatus(method, status);
-  // Tools declared with `forwardResult: true` in voice.md deliver their raw
-  // return value here on 'done' — render what the agent just did in lockstep
-  // with speech. Over ~32KB serialized arrives as `resultTruncated: true`.
+  // Every successful tool delivers its raw return value here on 'done' —
+  // render what the agent just did in lockstep with speech. Over ~32KB
+  // serialized arrives as `resultTruncated: true` instead.
   if (status === 'done' && result !== undefined) renderToolResult(method, result);
 });
 
 session.mute();
 session.unmute();
 await session.sendText('123 Main Street'); // exact strings beat spelling aloud
+// Client tools (voice.md `target: "client"`): the agent invokes, your handler
+// runs in this browser, and its return value goes back as the tool result.
+session.registerClientTool('showVerification', async (args) => {
+  openVerifySheet(args);
+  return { opened: true };
+});
+
+// Progressive auth: after your in-app verification succeeds, upgrade the live
+// session anonymous → signed-in in place (no teardown, conversation continues).
+await session.refreshIdentity();
 await session.end();
 ```
 

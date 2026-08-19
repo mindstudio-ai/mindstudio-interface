@@ -200,6 +200,20 @@ export interface AgentToolCallResultEvent {
   ts: number;
 }
 
+/**
+ * The agent invoked a client tool (agent.md `target: "client"`) — an action
+ * that happens in this browser (open a sheet, navigate, highlight). Handle it
+ * via `onClientToolCall`. Fire-and-forget: the agent continues immediately
+ * with an acknowledgment; your next message closes the loop.
+ */
+export interface AgentClientToolCallEvent {
+  type: 'client_tool_call';
+  id: string;
+  name: string;
+  input: unknown;
+  ts: number;
+}
+
 /** Stream complete. */
 export interface AgentDoneEvent {
   type: 'done';
@@ -224,6 +238,7 @@ export type AgentChatEvent =
   | AgentToolInputDeltaEvent
   | AgentToolCallStartEvent
   | AgentToolCallResultEvent
+  | AgentClientToolCallEvent
   | AgentDoneEvent
   | AgentErrorEvent;
 
@@ -264,6 +279,13 @@ export interface SendMessageCallbacks {
 
   /** Called when a tool call produces a result. */
   onToolCallResult?: (id: string, output: unknown) => void;
+
+  /**
+   * Called when the agent invokes a client tool (agent.md `target:
+   * "client"`) — run the on-screen action here. Fire-and-forget: the agent
+   * has already been told the action was displayed.
+   */
+  onClientToolCall?: (name: string, input: unknown, id: string) => void;
 
   /** Called on a stream-level error event. */
   onError?: (error: string) => void;
@@ -332,6 +354,24 @@ export interface AgentChatClient {
 
   /** Delete a thread (soft delete). */
   deleteThread(threadId: string): Promise<void>;
+
+  /**
+   * Claim an anonymous thread after in-app verification (progressive auth).
+   * Login replaces the app's session token, which makes threads started
+   * anonymously unreachable — claiming re-binds the thread to the signed-in
+   * user so the conversation survives the login. Call it right after your
+   * verification succeeds, for each anonymous thread you want to keep.
+   *
+   * Ownership is proven with the token the thread was created/used under:
+   * the client remembers it automatically for threads touched in this page
+   * session; pass `previousToken` explicitly for threads from an earlier
+   * page load (e.g. a token you persisted before login).
+   * Rejects with `already_identified` if the thread already has an owner.
+   */
+  claimThread(
+    threadId: string,
+    options?: { previousToken?: string },
+  ): Promise<void>;
 
   /**
    * Send a message and stream the agent's response.
@@ -423,6 +463,9 @@ function dispatchEvent(
     case 'tool_call_result':
       callbacks.onToolCallResult?.(event.id, event.output);
       break;
+    case 'client_tool_call':
+      callbacks.onClientToolCall?.(event.name, event.input, event.id);
+      break;
     case 'error':
       callbacks.onError?.(event.error);
       break;
@@ -460,9 +503,25 @@ function dispatchEvent(
  * ```
  */
 export function createAgentChatClient(): AgentChatClient {
+  // Mint-time bearer per thread, for claimThread's ownership proof — after an
+  // in-app login the app's config token is REPLACED (a fresh interface
+  // session), so the pre-login token must be remembered to claim with.
+  const threadTokens = new Map<string, string>();
+  const rememberToken = (threadId: string) => {
+    const token = getConfig().token;
+    if (token && !threadTokens.has(threadId)) {
+      threadTokens.set(threadId, token);
+    }
+  };
+
   return {
-    createThread() {
-      return request<ThreadSummary>('/threads', 'POST');
+    async createThread() {
+      const token = getConfig().token;
+      const thread = await request<ThreadSummary>('/threads', 'POST');
+      if (token) {
+        threadTokens.set(thread.id, token);
+      }
+      return thread;
     },
 
     listThreads(cursor?: string) {
@@ -482,12 +541,27 @@ export function createAgentChatClient(): AgentChatClient {
       await request(`/threads/${threadId}`, 'DELETE');
     },
 
+    async claimThread(threadId: string, options?: { previousToken?: string }) {
+      const previousToken =
+        options?.previousToken ?? threadTokens.get(threadId);
+      if (!previousToken) {
+        throw new MindStudioInterfaceError(
+          'No pre-login token known for this thread — pass options.previousToken.',
+          'missing_previous_token',
+          400,
+        );
+      }
+      await request(`/threads/${threadId}/claim`, 'POST', { previousToken });
+      threadTokens.delete(threadId);
+    },
+
     sendMessage(
       threadId: string,
       content: string,
       callbacks?: SendMessageCallbacks,
       options?: SendMessageOptions,
     ): AbortablePromise<SendMessageResult> {
+      rememberToken(threadId);
       const controller = new AbortController();
       const cb = callbacks ?? {};
 
