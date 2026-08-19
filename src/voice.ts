@@ -70,6 +70,16 @@ export interface VoiceToolCallEvent {
   status: 'running' | 'done' | 'failed';
   /** Milliseconds since epoch. */
   at: number;
+  /**
+   * The tool's return value — present on 'done' only for tools whose voice.md
+   * block declares `forwardResult: true`, so the UI can render what the agent
+   * just did (a citation, a record, a confirmation) in lockstep with speech.
+   * Delivered only to this session's room; platform-guaranteed, no polling.
+   */
+  result?: unknown;
+  /** Set instead of `result` when the payload exceeded the forwarding size
+   * cap (~32KB serialized) — fetch the data yourself in that case. */
+  resultTruncated?: boolean;
 }
 
 export interface VoiceSessionCallbacks {
@@ -412,6 +422,8 @@ export function createVoiceClient(): VoiceClient {
                 method?: string;
                 status?: string;
                 at?: number;
+                result?: unknown;
+                resultTruncated?: boolean;
               };
               if (!parsed.method) {
                 return;
@@ -425,6 +437,12 @@ export function createVoiceClient(): VoiceClient {
                   method: parsed.method,
                   status,
                   at: parsed.at ?? Date.now(),
+                  ...(parsed.result !== undefined
+                    ? { result: parsed.result }
+                    : {}),
+                  ...(parsed.resultTruncated === true
+                    ? { resultTruncated: true }
+                    : {}),
                 });
               }
             } catch {
