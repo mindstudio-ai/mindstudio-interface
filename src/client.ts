@@ -71,7 +71,7 @@
  * If no type parameter is provided, methods accept `any` input and return `any`.
  */
 
-import { getConfig } from './config.js';
+import { getConfig, withBase } from './config.js';
 import { MindStudioInterfaceError } from './errors.js';
 
 /**
@@ -220,7 +220,7 @@ export function createClient<T = DefaultMethodClient>(): T {
           );
         }
 
-        const url = `/_/methods/${methodId}/invoke`;
+        const url = withBase(`/_/methods/${methodId}/invoke`);
         const wantsStream = options?.stream === true;
 
         const res = await fetch(url, {

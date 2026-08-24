@@ -29,7 +29,7 @@
  * `window.__MINDSTUDIO__.telemetry = { errors: false }`.
  */
 
-import { getConfig } from './config.js';
+import { getConfig, withBase } from './config.js';
 import {
   installBreadcrumbs,
   getBreadcrumbs,
@@ -136,7 +136,7 @@ async function flush(): Promise<void> {
   const events = takeBatch();
 
   try {
-    const res = await fetch(ENDPOINT, {
+    const res = await fetch(withBase(ENDPOINT), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -181,7 +181,7 @@ function drainOnUnload(): void {
   const events = takeBatch();
 
   try {
-    void fetch(ENDPOINT, {
+    void fetch(withBase(ENDPOINT), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

@@ -82,6 +82,14 @@ export interface BootstrapConfig {
   apiBaseUrl?: string;
 
   /**
+   * Mount prefix this app is served under on the current host (multi-zone
+   * mounts), e.g. "/demos/vector-databases". Empty/absent when the app serves
+   * at the root of its own subdomain or custom host. The SDK prefixes all its
+   * `/_/` calls with it; apps use it as their router basename.
+   */
+  basePath?: string;
+
+  /**
    * Authenticated user, or `null` if unauthenticated.
    *
    * For apps with auth enabled: `null` until the user verifies.

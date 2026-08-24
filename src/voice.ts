@@ -18,7 +18,7 @@
  * audio elements.
  */
 
-import { getConfig } from './config.js';
+import { getConfig, withBase } from './config.js';
 import { MindStudioInterfaceError } from './errors.js';
 import type { Room, RemoteTrack, TextStreamReader } from 'livekit-client';
 
@@ -276,7 +276,7 @@ async function request<T>(
     headers['Content-Type'] = 'application/json';
   }
 
-  const res = await fetch(`${VOICE_BASE}${path}`, {
+  const res = await fetch(withBase(`${VOICE_BASE}${path}`), {
     method,
     headers,
     ...(body !== undefined && { body: JSON.stringify(body) }),

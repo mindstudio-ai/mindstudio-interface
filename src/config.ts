@@ -67,6 +67,41 @@ export function getConfig(): BootstrapConfig {
 }
 
 /**
+ * The mount prefix this app is served under on the current host, normalized
+ * to '' (served at the root — its own subdomain/custom host) or a
+ * leading-slash, no-trailing-slash path like '/demos/vector-databases'
+ * (served under a parent app's mount).
+ *
+ * Reads the raw bootstrap directly and never throws, so telemetry and
+ * unload-time beacons can call it unconditionally. Use it as the router
+ * basename: `createBrowserRouter(routes, { basename: platform.basePath || '/' })`.
+ */
+export function getBasePath(): string {
+  const raw = (
+    (globalThis as Record<string, unknown>).__MINDSTUDIO__ as
+      | Partial<BootstrapConfig>
+      | undefined
+  )?.basePath;
+  if (typeof raw !== 'string') {
+    return '';
+  }
+  const trimmed = raw.replace(/\/+$/, '');
+  if (!trimmed) {
+    return '';
+  }
+  return trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+}
+
+/**
+ * Prefix a root-relative `/_/...` path with the mount basePath. Identity when
+ * the app serves at the root — every platform call in the SDK goes through
+ * this so mounted apps talk to their own `/_/` namespace on the parent host.
+ */
+export function withBase(path: string): string {
+  return `${getBasePath()}${path}`;
+}
+
+/**
  * Update the cached config in-place after an auth state transition.
  *
  * The cached config is a mutable reference — all SDK modules read it

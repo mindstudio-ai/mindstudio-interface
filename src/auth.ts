@@ -47,7 +47,7 @@
  * ```
  */
 
-import { getConfig, updateConfig } from './config.js';
+import { getConfig, updateConfig, withBase } from './config.js';
 import { MindStudioInterfaceError } from './errors.js';
 import type { AppUser, AuthSessionBundle } from './types.js';
 import * as phoneHelpers from './auth-phone.js';
@@ -71,7 +71,7 @@ async function authFetch<T>(
     headers['Content-Type'] = 'application/json';
   }
 
-  const res = await fetch(path, {
+  const res = await fetch(withBase(path), {
     method,
     headers,
     ...(body !== undefined && { body: JSON.stringify(body) }),
@@ -281,7 +281,7 @@ function signInWithRemyPopup(
   const callbackUrl = new URL(redirectUri, window.location.href);
   callbackUrl.searchParams.set(REMY_POPUP_MARKER, '1');
 
-  const startUrl = `/_/auth/remy/start?${new URLSearchParams({
+  const startUrl = `${withBase('/_/auth/remy/start')}?${new URLSearchParams({
     redirect_uri: callbackUrl.toString(),
     state,
   }).toString()}`;
@@ -858,7 +858,9 @@ export const auth: Auth = {
     }
 
     const params = new URLSearchParams({ redirect_uri: redirectUri, state });
-    window.location.assign(`/_/auth/remy/start?${params.toString()}`);
+    window.location.assign(
+      `${withBase('/_/auth/remy/start')}?${params.toString()}`,
+    );
 
     // The page is navigating away — nothing after this resolves.
     return new Promise<AppUser | null>(() => {});

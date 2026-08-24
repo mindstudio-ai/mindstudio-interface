@@ -50,7 +50,7 @@
  * Opt-out via `window.__MINDSTUDIO__.telemetry = { analytics: false }`.
  */
 
-import { getConfig } from './config.js';
+import { getConfig, withBase } from './config.js';
 import { onNavigation } from './telemetry-breadcrumbs.js';
 
 // ---------------------------------------------------------------------------
@@ -174,7 +174,7 @@ async function flush(): Promise<void> {
   const events = takeBatch();
 
   try {
-    const res = await fetch(EVENTS_ENDPOINT, {
+    const res = await fetch(withBase(EVENTS_ENDPOINT), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -219,7 +219,7 @@ function drainOnUnload(): void {
   const events = takeBatch();
 
   try {
-    void fetch(EVENTS_ENDPOINT, {
+    void fetch(withBase(EVENTS_ENDPOINT), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -382,7 +382,7 @@ async function openPresenceConnection(): Promise<void> {
   const signal = presenceAbort.signal;
 
   try {
-    const res = await fetch(PRESENCE_ENDPOINT, {
+    const res = await fetch(withBase(PRESENCE_ENDPOINT), {
       method: 'GET',
       headers: {
         Authorization: `Bearer ${config.token}`,
