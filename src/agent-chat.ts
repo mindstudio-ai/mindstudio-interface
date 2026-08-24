@@ -66,7 +66,7 @@
  * ```
  */
 
-import { getConfig } from './config.js';
+import { getConfig, withBase } from './config.js';
 import { MindStudioInterfaceError } from './errors.js';
 
 // ---------------------------------------------------------------------------
@@ -413,7 +413,7 @@ async function request<T>(
     headers['Content-Type'] = 'application/json';
   }
 
-  const res = await fetch(`${AGENT_BASE}${path}`, {
+  const res = await fetch(withBase(`${AGENT_BASE}${path}`), {
     method,
     headers,
     ...(body !== undefined && { body: JSON.stringify(body) }),
@@ -578,7 +578,7 @@ export function createAgentChatClient(): AgentChatClient {
 
       const promise = (async (): Promise<SendMessageResult> => {
         const config = getConfig();
-        const url = `${AGENT_BASE}/threads/${threadId}/messages`;
+        const url = withBase(`${AGENT_BASE}/threads/${threadId}/messages`);
 
         const res = await fetch(url, {
           method: 'POST',

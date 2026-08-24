@@ -19,7 +19,7 @@
  * ```
  */
 
-import { getConfig } from './config.js';
+import { getBasePath, getConfig, withBase } from './config.js';
 import { MindStudioInterfaceError } from './errors.js';
 
 /**
@@ -48,9 +48,24 @@ export interface UploadToken {
 }
 
 /**
- * The platform namespace — file upload actions.
+ * The platform namespace — file upload actions + serving context.
  */
 export const platform = {
+  /**
+   * The mount prefix this app is served under on the current host, or ''
+   * when serving at the root of its own subdomain/custom host. Use it as the
+   * router basename so routes resolve wherever the app is mounted:
+   *
+   * ```ts
+   * createBrowserRouter(routes, { basename: platform.basePath || '/' });
+   * ```
+   *
+   * The SDK already prefixes all its own platform calls with it.
+   */
+  get basePath(): string {
+    return getBasePath();
+  },
+
   /**
    * Upload a file to the MindStudio CDN.
    *
@@ -79,7 +94,7 @@ export const platform = {
     signal?.throwIfAborted();
 
     // Step 1: Get presigned upload URL
-    const presignUrl = '/_/generate-upload-request';
+    const presignUrl = withBase('/_/generate-upload-request');
     const presignRes = await fetch(presignUrl, {
       method: 'POST',
       headers: {
