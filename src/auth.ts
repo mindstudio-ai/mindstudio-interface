@@ -57,6 +57,16 @@ import * as emailHelpers from './auth-email.js';
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+/** True when the SDK is running inside a (cross-origin) iframe. */
+function isEmbedded(): boolean {
+  try {
+    return window.top !== window.self;
+  } catch {
+    // Cross-origin restrictions on reading window.top → we're definitely framed.
+    return true;
+  }
+}
+
 async function authFetch<T>(
   path: string,
   method: 'GET' | 'POST',
@@ -67,14 +77,25 @@ async function authFetch<T>(
     Authorization: `Bearer ${config.token}`,
   };
 
-  if (body !== undefined) {
+  // Every auth POST carries the framing hint, injected here at the transport
+  // so no cookie-setting endpoint (verify, change-confirm, exchange, logout)
+  // can miss it. The server can't detect framing itself — these are
+  // same-origin fetches — and it needs to know: a framed sign-in must set the
+  // `__ms_auth` cookie `SameSite=None; Partitioned` or the browser discards
+  // it, breaking header-less reads (private `file.url` in <img>/fetch) and
+  // session restore on reload. Endpoints that don't set cookies ignore the
+  // extra field.
+  const payload =
+    method === 'POST' ? { ...body, embedded: isEmbedded() } : body;
+
+  if (payload !== undefined) {
     headers['Content-Type'] = 'application/json';
   }
 
   const res = await fetch(withBase(path), {
     method,
     headers,
-    ...(body !== undefined && { body: JSON.stringify(body) }),
+    ...(payload !== undefined && { body: JSON.stringify(payload) }),
   });
 
   if (!res.ok) {
@@ -225,16 +246,6 @@ function endAuthenticating(): void {
   }
   redirectPending = false;
   notifyAuthListeners();
-}
-
-/** True when the SDK is running inside a (cross-origin) iframe. */
-function isEmbedded(): boolean {
-  try {
-    return window.top !== window.self;
-  } catch {
-    // Cross-origin restrictions on reading window.top → we're definitely framed.
-    return true;
-  }
 }
 
 // Sign-in popup size — compact and roughly square. (The old 480×720 opened tall
