@@ -301,6 +301,34 @@ chat.sendMessage(threadId, "What's in this document?", {
 
 Attachments are preserved in thread history — when you load a thread via `getThread()`, user messages include their original `attachments` array.
 
+#### Client tools
+
+A tool declared in `agent.md` with `target: "client"` runs in this browser instead of the app's backend. Register a handler and its return value goes back to the agent as the tool result, so the agent knows what happened instead of assuming:
+
+```ts
+const unregister = chat.registerClientTool('pickFile', async ({ prompt }) => {
+  const file = await openFilePicker(prompt);
+  return file ? { path: file.path } : { cancelled: true };
+});
+```
+
+The agent holds its turn while your handler runs, for up to 15 minutes — long enough that a handler can resolve from a dialog's Save button rather than returning immediately, which is what makes confirm-before-acting possible:
+
+```ts
+chat.registerClientTool('confirmDeploy', ({ summary }) =>
+  new Promise((resolve) => {
+    showApprovalDialog(summary, {
+      onApprove: (note) => resolve({ approved: true, note }),
+      onReject: (reason) => resolve({ approved: false, reason }),
+    });
+  }),
+);
+```
+
+The SDK always answers, so the agent is never left hanging: your return value, `{ error: <message> }` if the handler throws, `result_too_large` past ~32KB serialized, and `unhandled_client_tool` immediately when no handler is registered for the name. If nothing answers within the window the agent gets `client_timeout`; closing the page gets it `client_disconnected`.
+
+Handlers are keyed by tool name, live for the lifetime of the client rather than one message, and the returned function unregisters. For a one-off, the `onClientToolCall` callback on `sendMessage` works the same way — whatever it returns becomes the result — and is consulted only when no handler is registered for that name.
+
 #### SSE event types
 
 All events are available via the `onEvent` catch-all as the `AgentChatEvent` discriminated union:
@@ -312,6 +340,7 @@ All events are available via the `onEvent` catch-all as the `AgentChatEvent` dis
 | `thinking_complete` | `thinking`, `signature` | `onThinkingComplete` |
 | `tool_call_start` | `id`, `name` | `onToolCallStart` |
 | `tool_call_result` | `id`, `output` | `onToolCallResult` |
+| `client_tool_call` | `id`, `name`, `input`, `timeoutMs` | answered by `registerClientTool` |
 | `error` | `error` | `onError` |
 | `tool_use` | `id`, `name`, `input` | `onEvent` only |
 | `tool_input_delta` | `id`, `name`, `delta` | `onEvent` only |

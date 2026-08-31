@@ -26,11 +26,26 @@
  *   └─ Promise resolves with { stopReason, usage }
  * ```
  *
+ * ## Client tools
+ *
+ * A tool declared in `agent.md` with `target: "client"` runs in this browser
+ * instead of the app's backend. Register a handler and its return value goes
+ * back to the agent as the tool result:
+ *
+ * ```
+ *   ├─ data: {"type":"client_tool_call","id":"call_x","name":"pickFile","input":{...}}
+ *   │
+ *   ├─ your handler runs (the agent is waiting)
+ *   │
+ *   └─ POST /_/agent/threads/{threadId}/tool-results
+ *      Body: { callId: "call_x", result: { path: "/invoices/q3.pdf" } }
+ * ```
+ *
  * ## Stateless design
  *
- * This client is a thin wrapper over HTTP endpoints. It does not manage
- * local state — your React/framework layer owns the thread list, message
- * array, and UI state. Each method is an independent request.
+ * This client is a thin wrapper over HTTP endpoints. Apart from client-tool
+ * handlers, it does not manage local state — your React/framework layer owns
+ * the thread list, message array, and UI state.
  *
  * ## Streaming callbacks
  *
@@ -202,15 +217,18 @@ export interface AgentToolCallResultEvent {
 
 /**
  * The agent invoked a client tool (agent.md `target: "client"`) — an action
- * that happens in this browser (open a sheet, navigate, highlight). Handle it
- * via `onClientToolCall`. Fire-and-forget: the agent continues immediately
- * with an acknowledgment; your next message closes the loop.
+ * that happens in this browser (open a sheet, pick a file, confirm something).
+ * The agent is holding its turn until the SDK answers, which it always does:
+ * with your handler's return value, with an error if it threw, or with
+ * `unhandled_client_tool` if nothing is registered for the name.
  */
 export interface AgentClientToolCallEvent {
   type: 'client_tool_call';
   id: string;
   name: string;
   input: unknown;
+  /** How long the agent will wait for an answer before giving up on it. */
+  timeoutMs?: number;
   ts: number;
 }
 
@@ -281,11 +299,20 @@ export interface SendMessageCallbacks {
   onToolCallResult?: (id: string, output: unknown) => void;
 
   /**
-   * Called when the agent invokes a client tool (agent.md `target:
-   * "client"`) — run the on-screen action here. Fire-and-forget: the agent
-   * has already been told the action was displayed.
+   * Called when the agent invokes a client tool (agent.md `target: "client"`)
+   * and no handler is registered for its name — run the on-screen action here.
+   * Whatever you return becomes the tool result; return nothing and the agent
+   * is told the action ran.
+   *
+   * {@link AgentChatClient.registerClientTool} is the better home for anything
+   * beyond a one-off, since handlers there survive across messages and are
+   * keyed by tool name.
    */
-  onClientToolCall?: (name: string, input: unknown, id: string) => void;
+  onClientToolCall?: (
+    name: string,
+    input: unknown,
+    id: string,
+  ) => unknown | Promise<unknown>;
 
   /** Called on a stream-level error event. */
   onError?: (error: string) => void;
@@ -374,6 +401,35 @@ export interface AgentChatClient {
   ): Promise<void>;
 
   /**
+   * Register a handler for a client tool — a tool declared in `agent.md` with
+   * `target: "client"`, whose effect lives in this browser (open a sheet, pick
+   * a file, confirm an action). When the agent invokes it, the handler runs and
+   * its return value goes back as the tool result, so the agent knows what
+   * happened rather than assuming.
+   *
+   * The agent waits while your handler runs — long enough for a person to read
+   * something and decide — so a handler may resolve from a dialog's Save button
+   * as readily as it can return immediately. Throwing returns an error the
+   * agent reasons about; a tool with no handler answers instantly with
+   * `unhandled_client_tool` rather than leaving the agent hanging.
+   *
+   * One handler per tool name (a later registration replaces the earlier one);
+   * returns an unregister function.
+   *
+   * @example
+   * ```ts
+   * chat.registerClientTool('pickFile', async ({ prompt }) => {
+   *   const file = await openFilePicker(prompt);
+   *   return file ? { path: file.path } : { cancelled: true };
+   * });
+   * ```
+   */
+  registerClientTool(
+    name: string,
+    handler: (input: unknown) => unknown | Promise<unknown>,
+  ): () => void;
+
+  /**
    * Send a message and stream the agent's response.
    *
    * Returns an {@link AbortablePromise} that resolves with
@@ -398,6 +454,12 @@ export interface AgentChatClient {
 // ---------------------------------------------------------------------------
 
 const AGENT_BASE = '/_/agent';
+
+/**
+ * Matches the platform's own cap on a client-tool result. Caught here so an
+ * oversize return value reports itself instead of being rejected at the door.
+ */
+const CLIENT_TOOL_RESULT_MAX_CHARS = 32_000;
 
 async function request<T>(
   path: string,
@@ -439,6 +501,34 @@ async function request<T>(
   return (await res.json()) as T;
 }
 
+/**
+ * Answer one client-tool invocation. Fire-and-forget by design: the agent is
+ * the one waiting, and a failure to deliver leaves it to its own timeout —
+ * there is nothing useful for the page to do about it beyond saying so.
+ */
+async function postToolResult(
+  threadId: string,
+  body: { callId: string; result?: unknown; error?: string },
+): Promise<void> {
+  const config = getConfig();
+  const res = await fetch(
+    withBase(`${AGENT_BASE}/threads/${threadId}/tool-results`),
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${config.token}`,
+      },
+      body: JSON.stringify(body),
+    },
+  );
+  if (!res.ok) {
+    console.warn(
+      `[agent-chat] could not deliver client tool result: ${res.status} ${res.statusText}`,
+    );
+  }
+}
+
 function dispatchEvent(
   event: AgentChatEvent,
   callbacks: SendMessageCallbacks,
@@ -463,12 +553,56 @@ function dispatchEvent(
     case 'tool_call_result':
       callbacks.onToolCallResult?.(event.id, event.output);
       break;
-    case 'client_tool_call':
-      callbacks.onClientToolCall?.(event.name, event.input, event.id);
-      break;
+    // `client_tool_call` is deliberately absent: whoever answers it also runs
+    // it (see runClientTool), so dispatching the callback here too would run
+    // the action twice.
     case 'error':
       callbacks.onError?.(event.error);
       break;
+  }
+}
+
+type ClientToolHandler = (input: unknown) => unknown | Promise<unknown>;
+
+/**
+ * Run one client-tool invocation and answer it. Every path answers — a missing
+ * handler, a thrown handler and an oversize result included — because the agent
+ * is holding its turn on this call and silence costs it the full timeout.
+ */
+async function runClientTool(
+  threadId: string,
+  event: AgentClientToolCallEvent,
+  handler: ClientToolHandler | undefined,
+): Promise<void> {
+  if (!handler) {
+    console.warn(
+      `[agent-chat] client tool "${event.name}" was invoked but no handler is registered — call chat.registerClientTool()`,
+    );
+    await postToolResult(threadId, {
+      callId: event.id,
+      error: 'unhandled_client_tool',
+    });
+    return;
+  }
+
+  try {
+    const result = await handler(event.input);
+    if (result !== undefined) {
+      const serialized = JSON.stringify(result);
+      if (serialized && serialized.length > CLIENT_TOOL_RESULT_MAX_CHARS) {
+        await postToolResult(threadId, {
+          callId: event.id,
+          error: 'result_too_large',
+        });
+        return;
+      }
+    }
+    await postToolResult(threadId, { callId: event.id, result });
+  } catch (err) {
+    await postToolResult(threadId, {
+      callId: event.id,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 
@@ -507,6 +641,7 @@ export function createAgentChatClient(): AgentChatClient {
   // in-app login the app's config token is REPLACED (a fresh interface
   // session), so the pre-login token must be remembered to claim with.
   const threadTokens = new Map<string, string>();
+  const clientToolHandlers = new Map<string, ClientToolHandler>();
   const rememberToken = (threadId: string) => {
     const token = getConfig().token;
     if (token && !threadTokens.has(threadId)) {
@@ -553,6 +688,15 @@ export function createAgentChatClient(): AgentChatClient {
       }
       await request(`/threads/${threadId}/claim`, 'POST', { previousToken });
       threadTokens.delete(threadId);
+    },
+
+    registerClientTool(name: string, handler: ClientToolHandler) {
+      clientToolHandlers.set(name, handler);
+      return () => {
+        if (clientToolHandlers.get(name) === handler) {
+          clientToolHandlers.delete(name);
+        }
+      };
     },
 
     sendMessage(
@@ -647,6 +791,19 @@ export function createAgentChatClient(): AgentChatClient {
                   stopReason: event.stopReason,
                   usage: event.usage,
                 };
+              }
+
+              if (event.type === 'client_tool_call') {
+                // Detached on purpose: the handler may take as long as the
+                // agent's patience allows, and this loop has to keep draining
+                // the stream (keepalives included) while it does.
+                const handler =
+                  clientToolHandlers.get(event.name) ??
+                  (cb.onClientToolCall
+                    ? (input: unknown) =>
+                        cb.onClientToolCall!(event.name, input, event.id)
+                    : undefined);
+                void runClientTool(threadId, event, handler);
               }
 
               dispatchEvent(event, cb);
