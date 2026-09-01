@@ -52,6 +52,7 @@
 
 import { getConfig, withBase } from './config.js';
 import { onNavigation } from './telemetry-breadcrumbs.js';
+import { createSseLoop } from './sse-loop.js';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -318,149 +319,34 @@ function track(event: string, props?: CustomEventProps): void {
 // ---------------------------------------------------------------------------
 
 const PRESENCE_ENDPOINT = '/_/telemetry/presence';
-const PRESENCE_MAX_BACKOFF_MS = 10_000;
-const PRESENCE_503_DEFAULT_MS = 30_000;
-// A stream must stay open at least this long to count as a *stable* connect
-// and earn a backoff reset. Shorter-lived streams are treated as flaps so
-// the backoff keeps escalating instead of hammering a ~1s reconnect loop.
-const PRESENCE_STABLE_MS = 30_000;
 
-let presenceAbort: AbortController | null = null;
-let presenceReconnectTimer: ReturnType<typeof setTimeout> | null = null;
-let presenceBackoffMs = 1000;
-let presenceActive = false;
-
-function presenceNextBackoff(): number {
-  const base = presenceBackoffMs;
-  presenceBackoffMs = Math.min(presenceBackoffMs * 2, PRESENCE_MAX_BACKOFF_MS);
-  const jitter = Math.random() * 250;
-  return base + jitter;
-}
-
-function schedulePresenceReconnect(ms: number): void {
-  if (presenceReconnectTimer) {
-    clearTimeout(presenceReconnectTimer);
-  }
-  presenceReconnectTimer = setTimeout(() => {
-    presenceReconnectTimer = null;
-    if (presenceActive) {
-      void openPresenceConnection();
+// The connection machinery — backoff + jitter, the stable-connection rule,
+// 503 Retry-After, abort lifecycle — lives in sse-loop.ts, shared with the
+// app-events client (events.ts). Only presence's POLICY lives here: stop for
+// good on 401 (session bad — nothing to do until something refreshes config)
+// and on 204 (presence stubbed/disabled — the dev-tunnel mock relies on
+// EventSource semantics, where a 204 means "abandon and do NOT reconnect").
+// No onLine handler: lines are drained and discarded inside the loop, since
+// the open connection is the presence signal and the visitor-facing SDK
+// deliberately exposes no counts.
+const presenceLoop = createSseLoop({
+  prepare: () => {
+    let config;
+    try {
+      config = getConfig();
+    } catch {
+      return 'stop';
     }
-  }, ms);
-}
+    return {
+      url: withBase(PRESENCE_ENDPOINT),
+      headers: { Authorization: `Bearer ${config.token}` },
+    };
+  },
+  onStatus: (status) => (status === 401 || status === 204 ? 'stop' : 'retry'),
+});
 
 function closePresenceConnection(): void {
-  presenceActive = false;
-  if (presenceReconnectTimer) {
-    clearTimeout(presenceReconnectTimer);
-    presenceReconnectTimer = null;
-  }
-  if (presenceAbort) {
-    try {
-      presenceAbort.abort();
-    } catch {
-      // swallow
-    }
-    presenceAbort = null;
-  }
-}
-
-async function openPresenceConnection(): Promise<void> {
-  if (!presenceActive) {
-    return;
-  }
-
-  let config;
-  try {
-    config = getConfig();
-  } catch {
-    presenceActive = false;
-    return;
-  }
-
-  presenceAbort = new AbortController();
-  const signal = presenceAbort.signal;
-
-  try {
-    const res = await fetch(withBase(PRESENCE_ENDPOINT), {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${config.token}`,
-        Accept: 'text/event-stream',
-      },
-      signal,
-    });
-
-    if (res.status === 503) {
-      const retryAfterHeader = res.headers.get('Retry-After');
-      const retryAfterSec = retryAfterHeader
-        ? parseInt(retryAfterHeader, 10)
-        : NaN;
-      const waitMs =
-        Number.isFinite(retryAfterSec) && retryAfterSec > 0
-          ? retryAfterSec * 1000
-          : PRESENCE_503_DEFAULT_MS;
-      schedulePresenceReconnect(waitMs);
-      return;
-    }
-
-    if (res.status === 401) {
-      // Session bad — stop trying until something refreshes config
-      presenceActive = false;
-      return;
-    }
-
-    if (res.status === 204) {
-      // Presence is stubbed/disabled for this session — e.g. the dev tunnel
-      // mock, or a backend with presence turned off. Per EventSource
-      // semantics (which the dev mock explicitly relies on) a 204 means
-      // "abandon the connection and do NOT reconnect." Stop cleanly instead
-      // of hammering a reconnect loop against an endpoint that will keep
-      // returning 204. A 204 has res.ok === true but a null body, so this
-      // must be handled before the generic !res.body branch below.
-      presenceActive = false;
-      return;
-    }
-
-    if (!res.ok || !res.body) {
-      schedulePresenceReconnect(presenceNextBackoff());
-      return;
-    }
-
-    // Note the connect time — but don't reset the backoff yet. Resetting on
-    // the bare 200 lets a stream that closes immediately reconnect every ~1s
-    // forever (the backoff never engages). We only reset once the stream has
-    // stayed open long enough to count as stable (see below).
-    const connectedAt = Date.now();
-
-    const reader = res.body.getReader();
-
-    // Drain and discard. The open connection is the presence signal;
-    // any count data the server pushes is intentionally ignored.
-    while (presenceActive) {
-      const { done } = await reader.read();
-      if (done) {
-        break;
-      }
-    }
-
-    // Stream ended (server closed, deploy, etc.) — reconnect. If it stayed
-    // open long enough to be healthy, reset the backoff so the reconnect is
-    // prompt; otherwise let the backoff keep escalating (up to
-    // PRESENCE_MAX_BACKOFF_MS) so a flapping stream can't become a per-second
-    // reconnect storm.
-    if (presenceActive) {
-      if (Date.now() - connectedAt >= PRESENCE_STABLE_MS) {
-        presenceBackoffMs = 1000;
-      }
-      schedulePresenceReconnect(presenceNextBackoff());
-    }
-  } catch (err) {
-    const name = (err as { name?: string } | null)?.name;
-    if (presenceActive && name !== 'AbortError') {
-      schedulePresenceReconnect(presenceNextBackoff());
-    }
-  }
+  presenceLoop.stop();
 }
 
 // ---------------------------------------------------------------------------
@@ -527,8 +413,7 @@ export function installAnalytics(): void {
 
   // Silent presence heartbeat — the open connection itself signals
   // "this visitor is online" to the server. No data is consumed.
-  presenceActive = true;
-  void openPresenceConnection();
+  presenceLoop.start();
 }
 
 /**
