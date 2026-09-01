@@ -402,6 +402,37 @@ const { sessions, nextCursor } = await voice.listSessions();
 const detail = await voice.getSession(sessions[0].id); // includes transcript
 ```
 
+### `events`
+
+Server→client realtime. Backend code publishes to named channels (the agent SDK's `events.publish`); this client receives those publishes live over a platform-held SSE — no polling, no WebSockets. Authorization is a **grant** minted by one of the app's own backend methods, which is why `connect` takes a token *provider*: grants expire on purpose (expiry is the revocation window), and the SDK re-mints through your method on every expiry, re-running your auth checks.
+
+```ts
+import { createClient, events } from '@mindstudio-ai/interface';
+const api = createClient();
+
+const sub = events.connect({
+  // Your backend method does its auth checks, then mints the grant:
+  getToken: () => api.watchJobs().then((r) => r.token),
+
+  // A publish on one of the grant's channels:
+  onEvent: (e) => {
+    if (e.channel.startsWith('jobs:')) refreshJob(e.data);
+  },
+
+  // Fires on EVERY (re)connect — refetch current state here.
+  onConnect: () => refetchJobs(),
+
+  // Terminal only: your getToken threw (logged out, role revoked).
+  onError: (err) => showBanner(err.message),
+});
+
+sub.close(); // on unmount
+```
+
+**Reconcile on connect.** Events are at-most-once nudges: nothing is buffered while you're disconnected, nothing is replayed when you return. `onConnect` is where you refetch — a subscriber without it will silently miss whatever happened while it was away. Subscribe for speed, reconcile for truth.
+
+Reconnects (network drops, grant expiry, deploys) are handled internally with backoff; the app sees them only as `onConnect` firing again. A `getToken` failure is deliberately terminal — it means your own method refused, and retrying an authorization refusal in a loop is wrong; call `connect` again when your auth state changes.
+
 ## Error handling
 
 ```ts

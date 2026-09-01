@@ -77,6 +77,12 @@ export {
   type AnalyticsClient,
   type CustomEventProps,
 } from './telemetry-analytics.js';
+export {
+  events,
+  type AppEvent,
+  type EventsConnectOptions,
+  type EventsSubscription,
+} from './events.js';
 export { MindStudioInterfaceError } from './errors.js';
 export type { BootstrapConfig, AppUser } from './types.js';
 export type { Country } from './auth-phone.js';
