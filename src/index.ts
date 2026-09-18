@@ -12,6 +12,7 @@
  * - `platform` — file upload actions
  * - `auth` — authentication flows, user state, and validation helpers
  * - `analytics` — custom event tracking
+ * - `telemetry` — crash reporting: React root hooks + manual capture
  *
  * Voice sessions live on the `./voice` subpath (`createVoiceClient()` from
  * `@mindstudio-ai/interface/voice`) — deliberately not re-exported here, so
@@ -78,6 +79,14 @@ export {
   type CustomEventProps,
 } from './telemetry-analytics.js';
 export {
+  telemetry,
+  type Telemetry,
+  type CaptureOptions,
+  type ErrorMechanism,
+  type ReactErrorHandlerOptions,
+  type ReactErrorInfo,
+} from './telemetry-errors.js';
+export {
   events,
   type AppEvent,
   type EventsConnectOptions,
@@ -92,10 +101,17 @@ export type { Breadcrumb } from './telemetry-breadcrumbs.js';
 // Eager telemetry init
 //
 // When `window.__MINDSTUDIO__` is present at import time, trigger `getConfig()`
-// on the next tick so telemetry surfaces (errors, analytics, presence) install
-// at page load rather than on first SDK use. Without this, an app that creates
-// an `api` proxy at the module top but only invokes it from user interactions
-// would have no telemetry until the user clicks something.
+// so telemetry surfaces (errors, analytics, presence) install at page load
+// rather than on first SDK use. Without this, an app that creates an `api`
+// proxy at the module top but only invokes it from user interactions would
+// have no telemetry until the user clicks something.
+//
+// SYNCHRONOUS, deliberately. This ran in `setTimeout(…, 0)`, which lost the
+// race it did not look like it was in: `createRoot().render()` schedules React's
+// first render through the Scheduler's MessageChannel, and that task runs before
+// a queued timer. Every first-paint crash — the most common kind there is —
+// happened before the error listeners existed. Analytics install stays deferred
+// (in config.ts), where a tick costs nothing.
 //
 // In environments without the bootstrap (SSR/Node, tests, dev without platform
 // context), the guard skips this and the SDK falls back to lazy init — first
@@ -113,12 +129,10 @@ if (typeof window !== 'undefined') {
   const relayed = maybeRelayRemyPopupCallback();
 
   if (!relayed && (globalThis as Record<string, unknown>).__MINDSTUDIO__) {
-    setTimeout(() => {
-      try {
-        getConfig();
-      } catch {
-        // bootstrap reads can still happen lazily on first SDK call
-      }
-    }, 0);
+    try {
+      getConfig();
+    } catch {
+      // bootstrap reads can still happen lazily on first SDK call
+    }
   }
 }

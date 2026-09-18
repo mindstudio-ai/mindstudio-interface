@@ -1,31 +1,52 @@
 /**
- * Error reporting — auto-capture of uncaught errors and unhandled
- * promise rejections, batched and shipped to `/_/telemetry/errors`.
+ * Error reporting — crashes batched and shipped to `/_/telemetry/errors`.
  *
- * ## How it works
+ * ## Producers
  *
- * Installed by `maybeInstallTelemetry()`, which is called by `getConfig()`
- * in `config.ts`. `getConfig()` runs automatically on the next tick after
- * SDK import when the platform bootstrap is present (see eager-init block
- * in `src/index.ts`), so installation happens at page load without app
- * code needing to invoke anything. Falls back to lazy install on first
- * SDK use if eager init was skipped (SSR / tests / no bootstrap).
+ * The window is not the design, it is one producer. Everything enters
+ * through {@link capture}, and every entrant declares a MECHANISM (which
+ * producer reported it) and whether it was HANDLED (did the app degrade
+ * gracefully, or did the user hit a wall):
  *
- * Once installed:
+ * | mechanism                      | source                        | handled |
+ * | ------------------------------ | ----------------------------- | ------- |
+ * | `browser.onerror`              | window `error` event          | false   |
+ * | `browser.onunhandledrejection` | window rejection event        | false   |
+ * | `react.error_handler`          | {@link reactErrorHandler}     | false   |
+ * | `manual`                       | {@link captureException}      | true    |
  *
- * 1. `window.error` and `unhandledrejection` listeners enqueue events
- *    into a pending batch (max 50 per batch — the server cap).
+ * This matters because React never tells the window about an error one of
+ * its boundaries caught — `onCaughtError` defaults to `console.error` and
+ * nothing else — so a render crash in an app with a boundary is invisible
+ * to the window listeners. React 19 apps wire the root hooks instead:
+ *
+ * ```ts
+ * createRoot(el, {
+ *   onUncaughtError: telemetry.reactErrorHandler(),
+ *   onCaughtError: telemetry.reactErrorHandler(),
+ * });
+ * ```
+ *
+ * ## Transport
+ *
+ * Installed by `maybeInstallTelemetry()`, which `getConfig()` calls on
+ * first successful bootstrap read — synchronously at import when the
+ * platform bootstrap is present (see the eager-init block in
+ * `src/index.ts`), because React's first render task would otherwise run
+ * before the listeners existed. Falls back to lazy install on first SDK
+ * use if eager init was skipped (SSR / tests / no bootstrap).
+ *
+ * 1. Producers enqueue into a pending batch (max 50 — the server cap).
  * 2. Events with the same fingerprint within a batch collapse into a
  *    single entry with `count: N` (bandwidth optimization).
- * 3. The batch flushes ~1s after the first push via `POST` to
- *    `/_/telemetry/errors`.
+ * 3. The batch flushes ~1s after the first push via `POST`.
  * 4. On `pagehide` / `visibilitychange='hidden'`, the buffer drains
  *    via `fetch` with `keepalive: true` so the Bearer header survives.
  * 5. On `429`, the SDK pauses sends for the `Retry-After` window.
  * 6. Any other transport failure is swallowed — telemetry must never
  *    crash the host app.
  *
- * No public API — the only knob is opt-out via
+ * Opt out of every producer, including the manual one, via
  * `window.__MINDSTUDIO__.telemetry = { errors: false }`.
  */
 
@@ -41,14 +62,26 @@ const FLUSH_INTERVAL_MS = 1000;
 const MAX_BATCH_SIZE = 50;
 const DEFAULT_RETRY_AFTER_MS = 60_000;
 
+/**
+ * Which producer reported a crash. Server-side vocabulary; an unrecognized
+ * string is stored as `unknown` rather than dropped.
+ */
+export type ErrorMechanism =
+  | 'browser.onerror'
+  | 'browser.onunhandledrejection'
+  | 'react.error_handler'
+  | 'manual';
+
 interface ErrorEvent {
   releaseId: string;
   url: string;
   userAgent: string;
   timestamp: number;
-  type: 'error' | 'unhandledrejection';
+  mechanism: string;
+  handled: boolean;
   message: string;
   stack: string;
+  componentStack?: string;
   source?: string;
   line?: number;
   column?: number;
@@ -62,7 +95,6 @@ let _installed = false;
 let pending: ErrorEvent[] = [];
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
 let suppressUntil = 0;
-let unloaded = false;
 
 function fingerprint(message: string, stack: string): string {
   const firstStackLine = stack.split('\n')[1] ?? '';
@@ -70,10 +102,6 @@ function fingerprint(message: string, stack: string): string {
 }
 
 function enqueue(event: ErrorEvent): void {
-  if (unloaded) {
-    return;
-  }
-
   const fp = fingerprint(event.message, event.stack);
 
   for (const existing of pending) {
@@ -195,20 +223,78 @@ function drainOnUnload(): void {
   }
 }
 
-function captureError(e: globalThis.ErrorEvent): void {
+/**
+ * Read a message + stack off anything a producer might hand us: an Error,
+ * a rejection reason, a string, a DOM exception, `undefined`.
+ */
+function describe(
+  error: unknown,
+  fallbackMessage: string,
+): { message: string; stack: string } {
+  if (error instanceof Error) {
+    return {
+      message: error.message || fallbackMessage,
+      stack: error.stack ?? '',
+    };
+  }
+  if (error && typeof error === 'object') {
+    const shaped = error as { message?: unknown; stack?: unknown };
+    return {
+      message:
+        typeof shaped.message === 'string' && shaped.message
+          ? shaped.message
+          : String(error),
+      stack: typeof shaped.stack === 'string' ? shaped.stack : '',
+    };
+  }
+  return { message: String(error ?? fallbackMessage), stack: '' };
+}
+
+/**
+ * The one door into the queue. Every producer goes through here, so the
+ * errors opt-out, the bootstrap read and the never-throw guarantee are all
+ * enforced in one place.
+ */
+function capture(
+  error: unknown,
+  options: {
+    mechanism: string;
+    handled: boolean;
+    fallbackMessage?: string;
+    /** Overrides for producers that know better than `error` does. */
+    message?: string;
+    componentStack?: string | null;
+    source?: string;
+    line?: number;
+    column?: number;
+  },
+): void {
   try {
     const config = getConfig();
+    if (config.telemetry?.errors === false) {
+      return;
+    }
+
+    const described = describe(
+      error,
+      options.fallbackMessage ?? 'Unknown error',
+    );
+
     enqueue({
       releaseId: config.releaseId,
       url: location.href,
       userAgent: navigator.userAgent,
       timestamp: Date.now(),
-      type: 'error',
-      message: e.message || 'Unknown error',
-      stack: e.error?.stack ?? '',
-      source: e.filename || undefined,
-      line: typeof e.lineno === 'number' ? e.lineno : undefined,
-      column: typeof e.colno === 'number' ? e.colno : undefined,
+      mechanism: options.mechanism,
+      handled: options.handled,
+      message: options.message || described.message,
+      stack: described.stack,
+      ...(options.componentStack
+        ? { componentStack: options.componentStack }
+        : {}),
+      ...(options.source ? { source: options.source } : {}),
+      ...(typeof options.line === 'number' ? { line: options.line } : {}),
+      ...(typeof options.column === 'number' ? { column: options.column } : {}),
       breadcrumbs: getBreadcrumbs(),
     });
   } catch {
@@ -216,37 +302,25 @@ function captureError(e: globalThis.ErrorEvent): void {
   }
 }
 
+function captureError(e: globalThis.ErrorEvent): void {
+  capture(e.error, {
+    mechanism: 'browser.onerror',
+    handled: false,
+    // The event's own message survives a cross-origin stack strip; the
+    // error object may not be there at all.
+    message: e.message,
+    source: e.filename || undefined,
+    line: typeof e.lineno === 'number' ? e.lineno : undefined,
+    column: typeof e.colno === 'number' ? e.colno : undefined,
+  });
+}
+
 function captureRejection(e: PromiseRejectionEvent): void {
-  try {
-    const config = getConfig();
-    const reason = e.reason as
-      | { message?: string; stack?: string }
-      | string
-      | undefined;
-
-    let message: string;
-    let stack = '';
-
-    if (reason && typeof reason === 'object') {
-      message = reason.message || String(reason);
-      stack = reason.stack ?? '';
-    } else {
-      message = String(reason ?? 'Unhandled rejection');
-    }
-
-    enqueue({
-      releaseId: config.releaseId,
-      url: location.href,
-      userAgent: navigator.userAgent,
-      timestamp: Date.now(),
-      type: 'unhandledrejection',
-      message,
-      stack,
-      breadcrumbs: getBreadcrumbs(),
-    });
-  } catch {
-    // never crash on capture
-  }
+  capture(e.reason, {
+    mechanism: 'browser.onunhandledrejection',
+    handled: false,
+    fallbackMessage: 'Unhandled rejection',
+  });
 }
 
 /**
@@ -288,11 +362,11 @@ export function installErrorMonitoring(): void {
   window.addEventListener('error', captureError);
   window.addEventListener('unhandledrejection', captureRejection);
 
-  const handleUnload = (): void => {
-    unloaded = true;
-    drainOnUnload();
-  };
-  window.addEventListener('pagehide', handleUnload);
+  // Drain on the way out, but stay live: `pagehide` fires when a mobile
+  // browser backgrounds the tab, and the page can come back from the
+  // back/forward cache and run for hours more. Latching "unloaded" here
+  // meant every crash after the first backgrounding was dropped.
+  window.addEventListener('pagehide', drainOnUnload);
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') {
       drainOnUnload();
@@ -314,3 +388,91 @@ export function maybeInstallTelemetry(): void {
     // telemetry must never crash the host app
   }
 }
+
+//////////////////////////////////////////////////////////////////////////////
+// Public API
+//////////////////////////////////////////////////////////////////////////////
+
+/** What React 19's `onCaughtError` / `onUncaughtError` pass as their 2nd arg. */
+export interface ReactErrorInfo {
+  componentStack?: string | null;
+}
+
+export interface CaptureOptions {
+  /**
+   * Which producer this came from. Defaults to `manual`. Values outside
+   * {@link ErrorMechanism} are accepted but stored as `unknown`.
+   */
+  mechanism?: ErrorMechanism | string;
+  /**
+   * Did the app degrade gracefully? Defaults to `true` for a manual
+   * capture — you caught it, so something other than a dead page happened.
+   */
+  handled?: boolean;
+  /** React component tree, when you have one. */
+  componentStack?: string | null;
+}
+
+export interface ReactErrorHandlerOptions {
+  /**
+   * Whether the boundary that caught this rendered a real fallback.
+   * Defaults to `false`: a boundary existing is not evidence the app
+   * recovered, and the common root boundary is a dead end.
+   */
+  handled?: boolean;
+  /** Called after the report is queued, with React's own arguments. */
+  onError?: (error: unknown, errorInfo?: ReactErrorInfo) => void;
+}
+
+export interface Telemetry {
+  captureException(error: unknown, options?: CaptureOptions): void;
+  reactErrorHandler(
+    options?: ReactErrorHandlerOptions,
+  ): (error: unknown, errorInfo?: ReactErrorInfo) => void;
+}
+
+/**
+ * Crash reporting for cases the window can't see.
+ *
+ * @example Report something you caught yourself
+ * ```ts
+ * try {
+ *   await api.submitOrder(order);
+ * } catch (err) {
+ *   telemetry.captureException(err);
+ *   setError('Could not submit that order.');
+ * }
+ * ```
+ *
+ * @example Wire React 19's root hooks (required to see render crashes)
+ * ```tsx
+ * createRoot(document.getElementById('root')!, {
+ *   onUncaughtError: telemetry.reactErrorHandler(),
+ *   onCaughtError: telemetry.reactErrorHandler(),
+ * }).render(<App />);
+ * ```
+ */
+export const telemetry: Telemetry = {
+  captureException(error, options) {
+    capture(error, {
+      mechanism: options?.mechanism ?? 'manual',
+      handled: options?.handled ?? true,
+      ...(options?.componentStack
+        ? { componentStack: options.componentStack }
+        : {}),
+    });
+  },
+
+  reactErrorHandler(options) {
+    return (error, errorInfo) => {
+      capture(error, {
+        mechanism: 'react.error_handler',
+        handled: options?.handled ?? false,
+        ...(errorInfo?.componentStack
+          ? { componentStack: errorInfo.componentStack }
+          : {}),
+      });
+      options?.onError?.(error, errorInfo);
+    };
+  },
+};
