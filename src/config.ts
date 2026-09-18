@@ -60,8 +60,17 @@ export function getConfig(): BootstrapConfig {
 
   // Auto-install telemetry surfaces on first successful config read.
   // Both are idempotent + try/caught — telemetry must never break getConfig().
+  //
+  // Errors install synchronously: the listeners have to exist before React's
+  // first render task, which is the whole reason index.ts calls this eagerly.
+  // Analytics waits a tick — its first pageview reads the URL, and taking it
+  // after the app's router has had a chance to normalize it is the more
+  // accurate reading, quite apart from keeping a presence connection off the
+  // critical path.
   maybeInstallTelemetry();
-  maybeInstallAnalytics();
+  setTimeout(() => {
+    maybeInstallAnalytics();
+  }, 0);
 
   return _config;
 }

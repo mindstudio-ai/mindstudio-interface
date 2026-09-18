@@ -459,9 +459,41 @@ Authentication is cookie-based (`HttpOnly`, `Secure`, `SameSite=Lax`). The SDK n
 
 ## Error reporting
 
-Uncaught errors and unhandled promise rejections are automatically captured and shipped to the platform for bucketing + dashboards. No setup required — install happens automatically on page load (next tick after the SDK module loads). Reports include the error, a stack, and a breadcrumb trail of recent navigations + network calls for context.
+Uncaught errors and unhandled promise rejections are automatically captured and shipped to the platform for bucketing + dashboards. No setup required — install happens when the SDK module loads. Reports include the error, a stack, and a breadcrumb trail of recent navigations + network calls for context.
 
-Opt out per app via bootstrap config:
+### React crashes need two lines
+
+React does not tell the window about an error one of its error boundaries caught — `onCaughtError` defaults to `console.error` and nothing else. **An app with an error boundary and no root hooks reports no render crashes at all**, and those are the ones that white-screen an app. Wire React 19's root hooks and they come through with the component stack attached:
+
+```tsx
+import { telemetry } from '@mindstudio-ai/interface';
+
+createRoot(document.getElementById('root')!, {
+  onUncaughtError: telemetry.reactErrorHandler(),
+  onCaughtError: telemetry.reactErrorHandler(),
+}).render(
+  <ErrorBoundary>
+    <App />
+  </ErrorBoundary>,
+);
+```
+
+Crashes reported this way are marked **unhandled** — a boundary existing is not evidence the app recovered. If yours renders a real fallback the user can carry on from, say so: `telemetry.reactErrorHandler({ handled: true })`.
+
+### Reporting something you caught
+
+```ts
+try {
+  await api.submitOrder(order);
+} catch (err) {
+  telemetry.captureException(err);
+  setError('Could not submit that order.');
+}
+```
+
+Manual captures are marked handled by default, so they sort below real crashes in the dashboard.
+
+Opt out per app via bootstrap config — this covers `captureException` too:
 
 ```ts
 window.__MINDSTUDIO__.telemetry = { errors: false };
