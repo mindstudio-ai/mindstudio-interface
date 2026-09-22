@@ -23,10 +23,12 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "npm run tsc -- --noEmit",
     "prepare": "husky && tsup",
     "prepublishOnly": "tsup",
-    "lint:fix": "prettier --write ./src"
+    "lint:fix": "prettier --write ./src",
+    "tsc": "node node_modules/@typescript/native/bin/tsc",
+    "//tsc": "The native TypeScript 7 compiler by explicit path. Both it (typescript@7 under the @typescript/native alias) and the JS compiler behind the `typescript` alias — which tsup needs, since its bundled rollup-plugin-dts uses the compiler API — declare a `tsc` bin, so node_modules/.bin/tsc is whichever npm linked last."
   },
   "publishConfig": {
     "access": "public"
@@ -51,12 +53,13 @@
     "./dist/index.js"
   ],
   "devDependencies": {
+    "@typescript/native": "npm:typescript@^7.0.2",
     "husky": "^9.1.7",
     "lint-staged": "^16.3.2",
     "prettier": "^3.8.1",
     "prettier-plugin-curly": "^0.4.1",
     "tsup": "^8",
-    "typescript": "^5.5"
+    "typescript": "npm:@typescript/typescript6@^6.0.2"
   },
   "lint-staged": {
     "**/*": "prettier --write --ignore-unknown"

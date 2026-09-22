@@ -11,7 +11,11 @@
     "outDir": "./dist",
     "rootDir": "./src",
     "isolatedModules": true,
-    "lib": ["ES2022", "DOM", "DOM.Iterable"]
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    // tsup's dts build hardcodes `baseUrl: "."` (node_modules/tsup/dist/rollup.js),
+    // and the TS6 compiler API it generates declarations with makes that a hard
+    // error unless deprecations are acknowledged. Nothing here sets baseUrl.
+    "ignoreDeprecations": "6.0"
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]
