@@ -82,7 +82,7 @@
  */
 
 import { getConfig, withBase } from './config.js';
-import { MindStudioInterfaceError } from './errors.js';
+import { MindStudioInterfaceError, errorFromResponse } from './errors.js';
 
 // ---------------------------------------------------------------------------
 // Thread types
@@ -482,20 +482,11 @@ async function request<T>(
   });
 
   if (!res.ok) {
-    let errorMessage = `Agent chat request failed: ${res.status} ${res.statusText}`;
-    let errorCode = 'agent_chat_error';
-    try {
-      const err = (await res.json()) as { error?: string; code?: string };
-      if (err.error) {
-        errorMessage = err.error;
-      }
-      if (err.code) {
-        errorCode = err.code;
-      }
-    } catch {
-      // Response wasn't JSON — use the default message
-    }
-    throw new MindStudioInterfaceError(errorMessage, errorCode, res.status);
+    throw await errorFromResponse(
+      res,
+      `Agent chat request failed: ${res.status} ${res.statusText}`,
+      'agent_chat_error',
+    );
   }
 
   return (await res.json()) as T;
@@ -740,26 +731,10 @@ export function createAgentChatClient(): AgentChatClient {
         });
 
         if (!res.ok) {
-          let errorMessage = `Send message failed: ${res.status} ${res.statusText}`;
-          let errorCode = 'agent_chat_error';
-          try {
-            const err = (await res.json()) as {
-              error?: string;
-              code?: string;
-            };
-            if (err.error) {
-              errorMessage = err.error;
-            }
-            if (err.code) {
-              errorCode = err.code;
-            }
-          } catch {
-            // Response wasn't JSON — use the default message
-          }
-          throw new MindStudioInterfaceError(
-            errorMessage,
-            errorCode,
-            res.status,
+          throw await errorFromResponse(
+            res,
+            `Send message failed: ${res.status} ${res.statusText}`,
+            'agent_chat_error',
           );
         }
 

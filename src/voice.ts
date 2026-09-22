@@ -19,7 +19,7 @@
  */
 
 import { getConfig, withBase } from './config.js';
-import { MindStudioInterfaceError } from './errors.js';
+import { MindStudioInterfaceError, errorFromResponse } from './errors.js';
 import type { Room, RemoteTrack, TextStreamReader } from 'livekit-client';
 
 // ---------------------------------------------------------------------------
@@ -283,20 +283,11 @@ async function request<T>(
   });
 
   if (!res.ok) {
-    let errorMessage = `Voice request failed: ${res.status} ${res.statusText}`;
-    let errorCode = 'voice_error';
-    try {
-      const err = (await res.json()) as { error?: string; code?: string };
-      if (err.error) {
-        errorMessage = err.error;
-      }
-      if (err.code) {
-        errorCode = err.code;
-      }
-    } catch {
-      // Response wasn't JSON — use the default message
-    }
-    throw new MindStudioInterfaceError(errorMessage, errorCode, res.status);
+    throw await errorFromResponse(
+      res,
+      `Voice request failed: ${res.status} ${res.statusText}`,
+      'voice_error',
+    );
   }
 
   return (await res.json()) as T;

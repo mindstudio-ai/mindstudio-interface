@@ -72,7 +72,7 @@
  */
 
 import { getConfig, withBase } from './config.js';
-import { MindStudioInterfaceError } from './errors.js';
+import { MindStudioInterfaceError, errorFromResponse } from './errors.js';
 
 /**
  * Options for method invocation. Pass as the optional second argument to
@@ -236,26 +236,10 @@ export function createClient<T = DefaultMethodClient>(): T {
         });
 
         if (!res.ok) {
-          let errorMessage = `Method "${methodName}" failed: ${res.status} ${res.statusText}`;
-          let errorCode = 'method_error';
-          try {
-            const body = (await res.json()) as {
-              error?: string;
-              code?: string;
-            };
-            if (body.error) {
-              errorMessage = body.error;
-            }
-            if (body.code) {
-              errorCode = body.code;
-            }
-          } catch {
-            // Response wasn't JSON — use the default message
-          }
-          throw new MindStudioInterfaceError(
-            errorMessage,
-            errorCode,
-            res.status,
+          throw await errorFromResponse(
+            res,
+            `Method "${methodName}" failed: ${res.status} ${res.statusText}`,
+            'method_error',
           );
         }
 

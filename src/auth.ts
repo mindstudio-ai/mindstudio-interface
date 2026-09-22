@@ -48,7 +48,7 @@
  */
 
 import { getConfig, updateConfig, withBase } from './config.js';
-import { MindStudioInterfaceError } from './errors.js';
+import { MindStudioInterfaceError, errorFromResponse } from './errors.js';
 import type { AppUser, AuthSessionBundle } from './types.js';
 import * as phoneHelpers from './auth-phone.js';
 import * as emailHelpers from './auth-email.js';
@@ -99,20 +99,11 @@ async function authFetch<T>(
   });
 
   if (!res.ok) {
-    let message = `Auth request failed: ${res.status} ${res.statusText}`;
-    let code = 'auth_error';
-    try {
-      const err = (await res.json()) as { error?: string; code?: string };
-      if (err.error) {
-        message = err.error;
-      }
-      if (err.code) {
-        code = err.code;
-      }
-    } catch {
-      // Response wasn't JSON
-    }
-    throw new MindStudioInterfaceError(message, code, res.status);
+    throw await errorFromResponse(
+      res,
+      `Auth request failed: ${res.status} ${res.statusText}`,
+      'auth_error',
+    );
   }
 
   return (await res.json()) as T;

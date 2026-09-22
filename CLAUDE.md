@@ -27,7 +27,7 @@ src/
 
 - `npm run build` — tsup build (ESM only, outputs dist/)
 - `npm run dev` — tsup watch mode
-- `npm run typecheck` — tsc --noEmit
+- `npm run typecheck` — native TS7, no emit. Goes through `npm run tsc`; `node_modules/.bin/tsc` is unreliable because the TS6 compiler API tsup needs for `.d.ts` declares the same bin (see the `//tsc` note in package.json)
 
 ## How it works
 
