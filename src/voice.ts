@@ -245,7 +245,8 @@ export interface VoiceClient {
    * @throws {MindStudioInterfaceError} `microphone_denied` when the user
    *   refuses microphone access, `voice_concurrency_limit` /
    *   `voice_visitor_limit` when the app's session limits are reached,
-   *   `auth_required` (401) / `role_required` (403) when the interface's
+   *   `insufficient_credits/*` (402) when the app's workspace can't pay for a
+   *   call, `auth_required` (401) / `role_required` (403) when the interface's
    *   auth block denies the caller (route to the app's login flow),
    *   `no_voice_config` when the app has no voice interface.
    */
@@ -256,6 +257,16 @@ export interface VoiceClient {
 
   /** Fetch one past session, transcript included. */
   getSession(sessionId: string): Promise<VoiceSessionDetail>;
+
+  /**
+   * Delete one of the current user's (or visitor's) finished sessions,
+   * transcript included.
+   *
+   * @throws {MindStudioInterfaceError} `session_not_found` when it isn't
+   *   theirs or doesn't exist, `session_not_settled` while it is still in
+   *   progress or being billed (retry shortly).
+   */
+  deleteSession(sessionId: string): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -731,6 +742,13 @@ export function createVoiceClient(): VoiceClient {
       return request<VoiceSessionDetail>(
         `/sessions/${encodeURIComponent(sessionId)}`,
         'GET',
+      );
+    },
+
+    async deleteSession(sessionId: string): Promise<void> {
+      await request(
+        `/sessions/${encodeURIComponent(sessionId)}/delete`,
+        'POST',
       );
     },
   };
