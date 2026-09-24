@@ -392,14 +392,16 @@ await session.end();
 Agent audio playback is handled by the SDK (a hidden autoplaying element) — the app never touches
 audio elements. `startSession()` throws `MindStudioInterfaceError` with code `microphone_denied`
 when mic access is refused, `voice_concurrency_limit` / `voice_visitor_limit` when the app's
-session limits are hit, or `auth_required` (401) / `role_required` (403) when the voice
-interface's `auth` block denies the caller — route those to the app's login flow.
+session limits are hit, `insufficient_credits/*` when the app's workspace can't pay for a call,
+or `auth_required` (401) / `role_required` (403) when the voice interface's `auth` block denies
+the caller — route those to the app's login flow.
 
-Past sessions are call records:
+Past sessions are call records, and a caller can delete their own finished ones:
 
 ```ts
 const { sessions, nextCursor } = await voice.listSessions();
 const detail = await voice.getSession(sessions[0].id); // includes transcript
+await voice.deleteSession(sessions[0].id); // `session_not_settled` while it's still in progress
 ```
 
 ### `events`
